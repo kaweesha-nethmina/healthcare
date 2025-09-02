@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>API_KEY</key>
+	<string>AIzaSyDCtwP2ms353zEdlhvDVrKR8e06Rfn50iw</string>
+	<key>GCM_SENDER_ID</key>
+	<string>860802675389</string>
+	<key>PLIST_VERSION</key>
+	<string>1</string>
+	<key>BUNDLE_ID</key>
+	<string>com.lifelineplus.healthcare</string>
+	<key>PROJECT_ID</key>
+	<string>lifelineplus-b7c27</string>
+	<key>STORAGE_BUCKET</key>
+	<string>lifelineplus-b7c27.firebasestorage.app</string>
+	<key>IS_ADS_ENABLED</key>
+	<false></false>
+	<key>IS_ANALYTICS_ENABLED</key>
+	<false></false>
+	<key>IS_APPINVITE_ENABLED</key>
+	<true></true>
+	<key>IS_GCM_ENABLED</key>
+	<true></true>
+	<key>IS_SIGNIN_ENABLED</key>
+	<true></true>
+	<key>GOOGLE_APP_ID</key>
+	<string>1:860802675389:ios:71643b56576cebe486bdd4</string>
+</dict>
+</plist>
