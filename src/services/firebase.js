@@ -2,7 +2,7 @@ import { initializeApp, getApps } from 'firebase/app';
 import { initializeAuth, getReactNativePersistence } from 'firebase/auth';
 import ReactNativeAsyncStorage from '@react-native-async-storage/async-storage';
 import { getFirestore } from 'firebase/firestore';
-import { getStorage } from 'firebase/storage';
+// Note: Firebase Storage is replaced by Supabase Storage
 import { Platform } from 'react-native';
 
 // Platform-specific Firebase configuration
@@ -69,7 +69,7 @@ try {
 }
 
 const db = getFirestore(app);
-const storage = getStorage(app);
+// Note: Using Supabase Storage instead of Firebase Storage
 
 // Export Firebase functions directly from the SDK
 export {
@@ -96,15 +96,10 @@ export {
   getDocs
 } from 'firebase/firestore';
 
-export {
-  // Storage functions
-  ref,
-  uploadBytes,
-  getDownloadURL,
-  deleteObject
-} from 'firebase/storage';
+// Note: Firebase Storage functions removed - using Supabase Storage instead
+// For file uploads, use supabaseStorage from '../services/supabase'
 
 console.log(`Real Firebase services initialized successfully for ${Platform.OS}`);
 
-export { auth, db, storage };
+export { auth, db };
 export default app;

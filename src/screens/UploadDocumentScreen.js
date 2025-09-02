@@ -15,6 +15,20 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
 import { useAuth } from '../context/AuthContext';
 import {
+  db,
+  doc,
+  setDoc,
+  getDoc,
+  collection,
+  addDoc,
+  getDocs,
+  deleteDoc,
+  query,
+  where,
+  orderBy
+} from '../services/firebase';
+import { supabaseStorage } from '../services/supabase';
+import {
   COLORS,
   FONT_SIZES,
   SPACING,
@@ -27,19 +41,44 @@ const UploadDocumentScreen = ({ navigation }) => {
   const { user, userProfile } = useAuth();
   const [documents, setDocuments] = useState([]);
   const [uploading, setUploading] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     loadDocuments();
-  }, []);
+  }, [user?.uid]); // Reload when user changes
 
   const loadDocuments = async () => {
+    setLoading(true);
     try {
-      // In a real app, fetch from Firebase Storage
-      // For now, using mock data
-      setDocuments(mockDocuments);
+      if (!user?.uid) {
+        console.log('No user logged in, using mock data');
+        setDocuments(mockDocuments);
+        return;
+      }
+
+      console.log('Loading documents from Firebase for user:', user.uid);
+      
+      // Query user's documents from Firestore
+      const documentsRef = collection(db, 'users', user.uid, 'documents');
+      const q = query(documentsRef, orderBy('uploadDate', 'desc'));
+      const querySnapshot = await getDocs(q);
+      
+      const userDocuments = [];
+      querySnapshot.forEach((doc) => {
+        userDocuments.push({
+          id: doc.id,
+          ...doc.data()
+        });
+      });
+      
+      console.log('Loaded documents:', userDocuments.length);
+      setDocuments(userDocuments);
     } catch (error) {
-      console.error('Error loading documents:', error);
+      console.error('Error loading documents from Firebase:', error);
+      Alert.alert('Info', 'Loading documents locally. Please check your internet connection.');
       setDocuments(mockDocuments);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -108,45 +147,183 @@ const UploadDocumentScreen = ({ navigation }) => {
     }
   };
 
+  // Helper function to save metadata
+  const saveMetadata = async (fileName, file, publicUrl, filePath, fullFileName) => {
+    // Prepare document metadata for Firestore
+    const documentData = {
+      name: fileName,
+      originalName: file.name || fileName, // Use fileName as fallback if file.name is undefined
+      type: file.mimeType || file.type || 'application/octet-stream', // Add file.type as fallback
+      size: file.size || 0,
+      downloadURL: publicUrl,
+      supabaseFilePath: filePath, // Store Supabase path instead of Firebase path
+      uploadDate: new Date().toISOString(),
+      category: getDocumentCategory(file.mimeType || file.type || file.name),
+      userId: user.uid,
+      storageProvider: 'supabase' // Mark as Supabase storage
+    };
+    
+    console.log('Saving document metadata to Firebase Firestore...');
+    console.log('Document metadata:', JSON.stringify(documentData, null, 2));
+    
+    // Save document metadata to Firestore (Firebase)
+    const docRef = await addDoc(
+      collection(db, 'users', user.uid, 'documents'),
+      documentData
+    );
+    
+    console.log('Document metadata saved with ID:', docRef.id);
+    
+    // Add to local state
+    const newDocument = {
+      id: docRef.id,
+      ...documentData,
+      uri: publicUrl // For local display
+    };
+    
+    setDocuments(prev => [newDocument, ...prev]);
+    Alert.alert('Success', 'Document uploaded successfully to Supabase!');
+  };
+
   const uploadDocument = async (file) => {
+    if (!user?.uid) {
+      Alert.alert('Error', 'Please log in to upload documents');
+      return;
+    }
+
     setUploading(true);
     try {
-      // In a real app, upload to Firebase Storage
-      // For now, simulate upload
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      console.log('Starting upload for file:', file.name || 'Unknown');
       
-      const newDocument = {
-        id: Date.now().toString(),
-        name: file.name || `Image_${Date.now()}`,
-        type: file.mimeType || 'image/jpeg',
-        size: file.size || 0,
+      // Generate unique filename
+      const timestamp = Date.now();
+      const fileName = file.name || `document_${timestamp}`;
+      const sanitizedFileName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const fullFileName = `${timestamp}_${sanitizedFileName}`;
+      
+      console.log('Uploading to Supabase Storage...');
+      console.log('File details:', {
         uri: file.uri,
-        uploadDate: new Date().toISOString(),
-        category: 'general'
+        name: file.name,
+        type: file.mimeType || file.type,
+        size: file.size
+      });
+      
+      // Prepare file object for React Native upload
+      const fileForUpload = {
+        uri: file.uri,
+        type: file.mimeType || file.type || 'application/octet-stream',
+        name: fullFileName,
+        size: file.size
       };
-
-      setDocuments(prev => [newDocument, ...prev]);
-      Alert.alert('Success', 'Document uploaded successfully!');
+      
+      console.log('Starting Supabase upload with file object:', fileForUpload);
+      const { data: uploadData, error: uploadError } = await supabaseStorage.uploadFile(
+        user.uid,
+        fileForUpload,
+        fullFileName
+      );
+      
+      if (uploadError) {
+        throw new Error(`Supabase upload failed: ${uploadError.message}`);
+      }
+      
+      console.log('Upload successful, getting public URL...');
+      
+      // Get public URL for the uploaded file
+      const filePath = `documents/${user.uid}/${fullFileName}`;
+      const publicUrl = supabaseStorage.getPublicUrl(filePath);
+      
+      console.log('Public URL obtained:', publicUrl.substring(0, 50) + '...');
+      
+      // Save metadata using helper function
+      await saveMetadata(fileName, file, publicUrl, filePath, fullFileName);
+      
     } catch (error) {
-      Alert.alert('Error', 'Failed to upload document');
       console.error('Upload error:', error);
+      
+      let errorMessage = 'Failed to upload document';
+      if (error.message?.includes('unauthorized')) {
+        errorMessage = 'You do not have permission to upload files';
+      } else if (error.message?.includes('canceled')) {
+        errorMessage = 'Upload was cancelled';
+      } else if (error.message?.includes('Supabase upload failed')) {
+        errorMessage = error.message;
+      }
+      
+      Alert.alert('Upload Error', errorMessage);
     } finally {
       setUploading(false);
     }
   };
+  
+  // Helper function to determine document category
+  const getDocumentCategory = (mimeTypeOrName) => {
+    const type = (mimeTypeOrName || '').toLowerCase();
+    
+    if (type.includes('pdf')) return 'PDF Documents';
+    if (type.includes('image')) return 'Images';
+    if (type.includes('blood') || type.includes('test') || type.includes('lab')) return 'Lab Results';
+    if (type.includes('prescription') || type.includes('rx')) return 'Prescriptions';
+    if (type.includes('insurance')) return 'Insurance';
+    if (type.includes('xray') || type.includes('scan') || type.includes('mri')) return 'Medical Imaging';
+    
+    return 'General';
+  };
 
   const deleteDocument = async (docId) => {
+    const documentToDelete = documents.find(doc => doc.id === docId);
+    
     Alert.alert(
       'Delete Document',
-      'Are you sure you want to delete this document?',
+      `Are you sure you want to delete "${documentToDelete?.name || 'this document'}"?`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Delete',
           style: 'destructive',
-          onPress: () => {
-            setDocuments(prev => prev.filter(doc => doc.id !== docId));
-            Alert.alert('Success', 'Document deleted successfully');
+          onPress: async () => {
+            try {
+              if (!user?.uid) {
+                Alert.alert('Error', 'Please log in to delete documents');
+                return;
+              }
+              
+              console.log('Deleting document:', docId);
+              
+              // If document has a Supabase file path, delete from Supabase Storage
+              if (documentToDelete?.supabaseFilePath) {
+                console.log('Deleting from Supabase Storage:', documentToDelete.supabaseFilePath);
+                const { error: deleteError } = await supabaseStorage.deleteFile(
+                  documentToDelete.supabaseFilePath
+                );
+                
+                if (deleteError) {
+                  console.warn('Supabase delete error (continuing with Firestore delete):', deleteError);
+                } else {
+                  console.log('File deleted from Supabase Storage');
+                }
+              }
+              
+              // Delete metadata from Firestore (Firebase)
+              console.log('Deleting from Firestore...');
+              await deleteDoc(doc(db, 'users', user.uid, 'documents', docId));
+              console.log('Document metadata deleted from Firestore');
+              
+              // Remove from local state
+              setDocuments(prev => prev.filter(doc => doc.id !== docId));
+              Alert.alert('Success', 'Document deleted successfully');
+              
+            } catch (error) {
+              console.error('Delete error:', error);
+              
+              let errorMessage = 'Failed to delete document';
+              if (error.message?.includes('unauthorized')) {
+                errorMessage = 'You do not have permission to delete this file';
+              }
+              
+              Alert.alert('Delete Error', errorMessage);
+            }
           }
         }
       ]
@@ -180,37 +357,71 @@ const UploadDocumentScreen = ({ navigation }) => {
     </TouchableOpacity>
   );
 
-  const DocumentCard = ({ document }) => (
-    <Card style={styles.documentCard}>
-      <View style={styles.documentHeader}>
-        <View style={styles.documentIconContainer}>
-          <Ionicons 
-            name={getDocumentIcon(document.type)} 
-            size={24} 
-            color={COLORS.PRIMARY} 
-          />
-        </View>
-        <View style={styles.documentInfo}>
-          <Text style={styles.documentName} numberOfLines={1}>
-            {document.name}
-          </Text>
-          <Text style={styles.documentMeta}>
-            {formatFileSize(document.size)} • {new Date(document.uploadDate).toLocaleDateString()}
-          </Text>
-          <Text style={styles.documentCategory}>{document.category}</Text>
-        </View>
-        <TouchableOpacity
-          style={styles.deleteButton}
-          onPress={() => deleteDocument(document.id)}
-        >
-          <Ionicons name="trash-outline" size={20} color={COLORS.ERROR} />
+  const DocumentCard = ({ document }) => {
+    const handleDownload = () => {
+      if (document.downloadURL) {
+        Alert.alert(
+          'View Document',
+          `Would you like to view "${document.name}"?`,
+          [
+            { text: 'Cancel', style: 'cancel' },
+            {
+              text: 'View',
+              onPress: () => {
+                // In a real app, you might open the document in a viewer
+                // For now, just show the URL
+                console.log('Document URL:', document.downloadURL);
+                Alert.alert('Info', 'Document viewing feature will be available soon.');
+              }
+            }
+          ]
+        );
+      }
+    };
+
+    return (
+      <Card style={styles.documentCard}>
+        <TouchableOpacity onPress={handleDownload}>
+          <View style={styles.documentHeader}>
+            <View style={styles.documentIconContainer}>
+              <Ionicons 
+                name={getDocumentIcon(document.type)} 
+                size={24} 
+                color={COLORS.PRIMARY} 
+              />
+            </View>
+            <View style={styles.documentInfo}>
+              <Text style={styles.documentName} numberOfLines={1}>
+                {document.name}
+              </Text>
+              <Text style={styles.documentMeta}>
+                {formatFileSize(document.size)} • {new Date(document.uploadDate).toLocaleDateString()}
+              </Text>
+              <Text style={styles.documentCategory}>{document.category}</Text>
+              {document.storageProvider && (
+                <Text style={styles.storageProvider}>
+                  Stored on: {document.storageProvider === 'supabase' ? 'Supabase' : 'Firebase'}
+                </Text>
+              )}
+            </View>
+            <TouchableOpacity
+              style={styles.deleteButton}
+              onPress={() => deleteDocument(document.id)}
+            >
+              <Ionicons name="trash-outline" size={20} color={COLORS.ERROR} />
+            </TouchableOpacity>
+          </View>
+          {document.type.includes('image') && (document.downloadURL || document.uri) && (
+            <Image 
+              source={{ uri: document.downloadURL || document.uri }} 
+              style={styles.documentPreview}
+              onError={(error) => console.log('Image load error:', error)}
+            />
+          )}
         </TouchableOpacity>
-      </View>
-      {document.type.includes('image') && document.uri && (
-        <Image source={{ uri: document.uri }} style={styles.documentPreview} />
-      )}
-    </Card>
-  );
+      </Card>
+    );
+  };
 
   return (
     <SafeAreaView style={styles.container}>
@@ -438,6 +649,12 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZES.XS,
     color: COLORS.PRIMARY,
     fontWeight: '600',
+  },
+  storageProvider: {
+    fontSize: FONT_SIZES.XS,
+    color: COLORS.SUCCESS,
+    fontWeight: '500',
+    fontStyle: 'italic',
   },
   deleteButton: {
     padding: SPACING.SM,
