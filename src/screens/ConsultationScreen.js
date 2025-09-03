@@ -39,11 +39,13 @@ const ConsultationScreen = ({ navigation }) => {
   const loadUpcomingAppointments = async () => {
     try {
       setLoading(true);
+      
+      // Option 1: Simple query without orderBy to avoid index requirement
+      // We'll sort in memory instead
       const appointmentsQuery = query(
         collection(db, 'appointments'),
         where('patientId', '==', user.uid),
-        where('status', 'in', [CONSULTATION_STATUS.PENDING, CONSULTATION_STATUS.CONFIRMED]),
-        orderBy('appointmentDate', 'asc')
+        where('status', 'in', [CONSULTATION_STATUS.PENDING, CONSULTATION_STATUS.CONFIRMED])
       );
       
       const snapshot = await getDocs(appointmentsQuery);
@@ -52,11 +54,66 @@ const ConsultationScreen = ({ navigation }) => {
         ...doc.data()
       }));
       
-      setUpcomingAppointments(appointments);
+      // Sort appointments by date in memory
+      const sortedAppointments = appointments.sort((a, b) => {
+        const dateA = new Date(a.appointmentDate);
+        const dateB = new Date(b.appointmentDate);
+        return dateA - dateB;
+      });
+      
+      setUpcomingAppointments(sortedAppointments);
+      
     } catch (error) {
       console.error('Error loading appointments:', error);
-      // For demo purposes, use mock data if Firebase query fails
-      setUpcomingAppointments(mockAppointments);
+      
+      // If Firestore query fails, try alternative approach or use mock data
+      try {
+        console.log('Trying alternative query approach...');
+        
+        // Alternative: Query each status separately and combine
+        const pendingQuery = query(
+          collection(db, 'appointments'),
+          where('patientId', '==', user.uid),
+          where('status', '==', CONSULTATION_STATUS.PENDING)
+        );
+        
+        const confirmedQuery = query(
+          collection(db, 'appointments'),
+          where('patientId', '==', user.uid),
+          where('status', '==', CONSULTATION_STATUS.CONFIRMED)
+        );
+        
+        const [pendingSnapshot, confirmedSnapshot] = await Promise.all([
+          getDocs(pendingQuery),
+          getDocs(confirmedQuery)
+        ]);
+        
+        const pendingAppointments = pendingSnapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        }));
+        
+        const confirmedAppointments = confirmedSnapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        }));
+        
+        // Combine and sort
+        const allAppointments = [...pendingAppointments, ...confirmedAppointments];
+        const sortedAppointments = allAppointments.sort((a, b) => {
+          const dateA = new Date(a.appointmentDate);
+          const dateB = new Date(b.appointmentDate);
+          return dateA - dateB;
+        });
+        
+        setUpcomingAppointments(sortedAppointments);
+        console.log('Alternative query succeeded');
+        
+      } catch (alternativeError) {
+        console.error('Alternative query also failed:', alternativeError);
+        // For demo purposes, use mock data if Firebase query fails
+        setUpcomingAppointments(mockAppointments);
+      }
     } finally {
       setLoading(false);
     }

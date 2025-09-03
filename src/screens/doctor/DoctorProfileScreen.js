@@ -12,7 +12,9 @@ import {
   Image
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import * as ImagePicker from 'expo-image-picker';
 import { useAuth } from '../../context/AuthContext';
+import { supabaseStorage } from '../../services/supabase';
 import {
   COLORS,
   FONT_SIZES,
@@ -27,6 +29,7 @@ const DoctorProfileScreen = ({ navigation }) => {
   const [doctorData, setDoctorData] = useState({});
   const [showEditModal, setShowEditModal] = useState(false);
   const [editSection, setEditSection] = useState('');
+  const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
 
   useEffect(() => {
     loadDoctorProfile();
@@ -98,19 +101,159 @@ const DoctorProfileScreen = ({ navigation }) => {
     );
   };
 
+  const handleAvatarPress = () => {
+    Alert.alert(
+      'Change Profile Picture',
+      'Choose an option',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Take Photo', onPress: takePhoto },
+        { text: 'Choose from Gallery', onPress: pickImage }
+      ]
+    );
+  };
+
+  const takePhoto = async () => {
+    try {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      
+      if (status !== 'granted') {
+        Alert.alert('Permission needed', 'Camera permission is required to take photos.');
+        return;
+      }
+
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.8,
+      });
+
+      if (!result.canceled && result.assets[0]) {
+        await uploadProfilePicture(result.assets[0]);
+      }
+    } catch (error) {
+      Alert.alert('Error', 'Failed to take photo');
+      console.error('Camera error:', error);
+    }
+  };
+
+  const pickImage = async () => {
+    try {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      
+      if (status !== 'granted') {
+        Alert.alert('Permission needed', 'Photo library permission is required.');
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.8,
+      });
+
+      if (!result.canceled && result.assets[0]) {
+        await uploadProfilePicture(result.assets[0]);
+      }
+    } catch (error) {
+      Alert.alert('Error', 'Failed to select image');
+      console.error('Image picker error:', error);
+    }
+  };
+
+  const uploadProfilePicture = async (imageFile) => {
+    if (!userProfile?.uid) {
+      Alert.alert('Error', 'Please log in to update profile picture');
+      return;
+    }
+
+    setIsUploadingAvatar(true);
+    try {
+      console.log('Starting doctor profile picture upload...');
+      
+      // Delete old profile picture if exists
+      if (doctorData?.profilePicturePath) {
+        console.log('Deleting old profile picture...');
+        await supabaseStorage.deleteProfilePicture(doctorData.profilePicturePath);
+      }
+      
+      // Upload new profile picture
+      const { data: uploadData, error: uploadError } = await supabaseStorage.uploadProfilePicture(
+        userProfile.uid,
+        imageFile
+      );
+      
+      if (uploadError) {
+        throw new Error(`Profile picture upload failed: ${uploadError.message}`);
+      }
+      
+      console.log('Doctor profile picture uploaded successfully:', uploadData.publicUrl);
+      
+      // Update doctor data
+      const updatedDoctorData = {
+        ...doctorData,
+        profilePictureURL: uploadData.publicUrl,
+        profilePicturePath: uploadData.filePath
+      };
+      
+      setDoctorData(updatedDoctorData);
+      
+      // Update user profile
+      const result = await updateUserProfile({
+        profilePictureURL: uploadData.publicUrl,
+        profilePicturePath: uploadData.filePath
+      });
+      
+      if (result.success) {
+        Alert.alert('Success', 'Profile picture updated successfully!');
+      } else {
+        throw new Error(result.error || 'Failed to update profile');
+      }
+      
+    } catch (error) {
+      console.error('Doctor profile picture upload error:', error);
+      Alert.alert('Upload Error', error.message || 'Failed to upload profile picture');
+    } finally {
+      setIsUploadingAvatar(false);
+    }
+  };
+
   const ProfileHeader = () => (
     <Card style={styles.headerCard}>
       <View style={styles.profileHeader}>
-        <View style={styles.avatarContainer}>
+        <TouchableOpacity 
+          style={styles.avatarContainer}
+          onPress={handleAvatarPress}
+          disabled={isUploadingAvatar}
+        >
           <View style={styles.avatar}>
-            <Text style={styles.avatarText}>
-              {doctorData.firstName?.charAt(0)}{doctorData.lastName?.charAt(0)}
-            </Text>
+            {doctorData?.profilePictureURL || userProfile?.profilePictureURL ? (
+              <Image 
+                source={{ uri: doctorData?.profilePictureURL || userProfile?.profilePictureURL }} 
+                style={styles.avatarImage}
+                onError={() => console.log('Doctor avatar image load error')}
+              />
+            ) : (
+              <Text style={styles.avatarText}>
+                {doctorData.firstName?.charAt(0)}{doctorData.lastName?.charAt(0)}
+              </Text>
+            )}
+            {isUploadingAvatar && (
+              <View style={styles.uploadingOverlay}>
+                <Ionicons name="cloud-upload" size={20} color={COLORS.WHITE} />
+              </View>
+            )}
           </View>
-          <TouchableOpacity style={styles.editAvatarButton}>
+          <TouchableOpacity 
+            style={styles.editAvatarButton}
+            onPress={handleAvatarPress}
+            disabled={isUploadingAvatar}
+          >
             <Ionicons name="camera" size={16} color={COLORS.WHITE} />
           </TouchableOpacity>
-        </View>
+        </TouchableOpacity>
         
         <View style={styles.headerInfo}>
           <Text style={styles.doctorName}>
@@ -400,6 +543,23 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.PRIMARY,
     justifyContent: 'center',
     alignItems: 'center',
+    overflow: 'hidden',
+  },
+  avatarImage: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+  },
+  uploadingOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderRadius: 40,
   },
   avatarText: {
     fontSize: FONT_SIZES.XL,

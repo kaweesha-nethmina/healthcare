@@ -3,6 +3,7 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createStackNavigator } from '@react-navigation/stack';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS } from '../constants';
+import NotificationTabIcon from '../components/NotificationTabIcon';
 
 // Screens
 import HomeScreen from '../screens/HomeScreen';
@@ -37,6 +38,7 @@ const Stack = createStackNavigator();
 // Stack Navigators for each tab
 const HomeStack = createStackNavigator();
 const ConsultationStack = createStackNavigator();
+const NotificationStack = createStackNavigator();
 const EmergencyStack = createStackNavigator();
 const HealthRecordsStack = createStackNavigator();
 const ProfileStack = createStackNavigator();
@@ -114,6 +116,26 @@ const ConsultationStackNavigator = () => (
       options={{ title: 'Video Consultation' }}
     />
   </ConsultationStack.Navigator>
+);
+
+const NotificationStackNavigator = () => (
+  <NotificationStack.Navigator
+    screenOptions={{
+      headerStyle: {
+        backgroundColor: COLORS.PRIMARY,
+      },
+      headerTintColor: COLORS.WHITE,
+      headerTitleStyle: {
+        fontWeight: 'bold',
+      },
+    }}
+  >
+    <NotificationStack.Screen 
+      name="NotificationsMain" 
+      component={NotificationsScreen}
+      options={{ title: 'Notifications' }}
+    />
+  </NotificationStack.Navigator>
 );
 
 const EmergencyStackNavigator = () => (
@@ -218,6 +240,9 @@ const AppTabNavigator = () => {
             iconName = focused ? 'home' : 'home-outline';
           } else if (route.name === 'Consultation') {
             iconName = focused ? 'medical' : 'medical-outline';
+          } else if (route.name === 'Notifications') {
+            // Use custom notification icon with badge
+            return <NotificationTabIcon focused={focused} color={color} size={size} />;
           } else if (route.name === 'Emergency') {
             iconName = focused ? 'alert-circle' : 'alert-circle-outline';
           } else if (route.name === 'Health Records') {
@@ -254,6 +279,10 @@ const AppTabNavigator = () => {
         component={ConsultationStackNavigator}
       />
       <Tab.Screen 
+        name="Notifications" 
+        component={NotificationStackNavigator}
+      />
+      <Tab.Screen 
         name="Emergency" 
         component={EmergencyStackNavigator}
         options={{
@@ -263,10 +292,6 @@ const AppTabNavigator = () => {
             color: COLORS.WHITE,
           },
         }}
-      />
-      <Tab.Screen 
-        name="Health Records" 
-        component={HealthRecordsStackNavigator}
       />
       <Tab.Screen 
         name="Profile" 

@@ -8,17 +8,22 @@ import {
   TouchableOpacity,
   Alert,
   Modal,
-  TextInput
+  TextInput,
+  Image
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import * as ImagePicker from 'expo-image-picker';
 import { useAuth } from '../context/AuthContext';
+import { supabaseStorage } from '../services/supabase';
 import { COLORS, FONT_SIZES, SPACING, BORDER_RADIUS } from '../constants';
 import Button from '../components/Button';
 import Card from '../components/Card';
+import { testNotificationSystem } from '../utils/notificationTestUtils';
 
 const ProfileScreen = ({ navigation }) => {
   const { user, userProfile, logout, updateUserProfile } = useAuth();
   const [isEditModalVisible, setEditModalVisible] = useState(false);
+  const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
   const [editForm, setEditForm] = useState({
     firstName: userProfile?.firstName || '',
     lastName: userProfile?.lastName || '',
@@ -63,6 +68,144 @@ const ProfileScreen = ({ navigation }) => {
     }
   };
 
+  const handleAvatarPress = () => {
+    Alert.alert(
+      'Change Profile Picture',
+      'Choose an option',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Take Photo', onPress: takePhoto },
+        { text: 'Choose from Gallery', onPress: pickImage }
+      ]
+    );
+  };
+
+  const takePhoto = async () => {
+    try {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      
+      if (status !== 'granted') {
+        Alert.alert('Permission needed', 'Camera permission is required to take photos.');
+        return;
+      }
+
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.8,
+      });
+
+      if (!result.canceled && result.assets[0]) {
+        await uploadProfilePicture(result.assets[0]);
+      }
+    } catch (error) {
+      Alert.alert('Error', 'Failed to take photo');
+      console.error('Camera error:', error);
+    }
+  };
+
+  const pickImage = async () => {
+    try {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      
+      if (status !== 'granted') {
+        Alert.alert('Permission needed', 'Photo library permission is required.');
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.8,
+      });
+
+      if (!result.canceled && result.assets[0]) {
+        await uploadProfilePicture(result.assets[0]);
+      }
+    } catch (error) {
+      Alert.alert('Error', 'Failed to select image');
+      console.error('Image picker error:', error);
+    }
+  };
+
+  const uploadProfilePicture = async (imageFile) => {
+    if (!user?.uid) {
+      Alert.alert('Error', 'Please log in to update profile picture');
+      return;
+    }
+
+    setIsUploadingAvatar(true);
+    try {
+      console.log('Starting profile picture upload...');
+      
+      // Delete old profile picture if exists
+      if (userProfile?.profilePicturePath) {
+        console.log('Deleting old profile picture...');
+        await supabaseStorage.deleteProfilePicture(userProfile.profilePicturePath);
+      }
+      
+      // Upload new profile picture
+      const { data: uploadData, error: uploadError } = await supabaseStorage.uploadProfilePicture(
+        user.uid,
+        imageFile
+      );
+      
+      if (uploadError) {
+        throw new Error(`Profile picture upload failed: ${uploadError.message}`);
+      }
+      
+      console.log('Profile picture uploaded successfully:', uploadData.publicUrl);
+      
+      // Update user profile with new profile picture URL
+      const profileUpdate = {
+        profilePictureURL: uploadData.publicUrl,
+        profilePicturePath: uploadData.filePath
+      };
+      
+      const result = await updateUserProfile(profileUpdate);
+      if (result.success) {
+        Alert.alert('Success', 'Profile picture updated successfully!');
+      } else {
+        throw new Error(result.error || 'Failed to update profile');
+      }
+      
+    } catch (error) {
+      console.error('Profile picture upload error:', error);
+      Alert.alert('Upload Error', error.message || 'Failed to upload profile picture');
+    } finally {
+      setIsUploadingAvatar(false);
+    }
+  };
+
+  const handleTestNotifications = async () => {
+    if (!user?.uid) {
+      Alert.alert('Error', 'Please log in to test notifications');
+      return;
+    }
+
+    Alert.alert(
+      'Test Notifications',
+      'This will create sample notifications for testing. Continue?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Create Notifications',
+          onPress: async () => {
+            try {
+              await testNotificationSystem(user.uid);
+              Alert.alert('Success', 'Sample notifications created! Check the Notifications tab.');
+            } catch (error) {
+              console.error('Error testing notifications:', error);
+              Alert.alert('Error', 'Failed to create test notifications');
+            }
+          }
+        }
+      ]
+    );
+  };
+
   const ProfileItem = ({ icon, label, value, onPress }) => (
     <TouchableOpacity style={styles.profileItem} onPress={onPress}>
       <View style={styles.itemLeft}>
@@ -81,9 +224,31 @@ const ProfileScreen = ({ navigation }) => {
       <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
         {/* Header */}
         <Card style={styles.headerCard}>
-          <View style={styles.avatar}>
-            <Ionicons name="person" size={48} color={COLORS.WHITE} />
-          </View>
+          <TouchableOpacity 
+            style={styles.avatarContainer}
+            onPress={handleAvatarPress}
+            disabled={isUploadingAvatar}
+          >
+            <View style={styles.avatar}>
+              {userProfile?.profilePictureURL ? (
+                <Image 
+                  source={{ uri: userProfile.profilePictureURL }} 
+                  style={styles.avatarImage}
+                  onError={() => console.log('Avatar image load error')}
+                />
+              ) : (
+                <Ionicons name="person" size={48} color={COLORS.WHITE} />
+              )}
+              {isUploadingAvatar && (
+                <View style={styles.uploadingOverlay}>
+                  <Ionicons name="cloud-upload" size={24} color={COLORS.WHITE} />
+                </View>
+              )}
+            </View>
+            <View style={styles.cameraIcon}>
+              <Ionicons name="camera" size={16} color={COLORS.WHITE} />
+            </View>
+          </TouchableOpacity>
           <Text style={styles.userName}>
             {userProfile?.firstName} {userProfile?.lastName}
           </Text>
@@ -167,6 +332,13 @@ const ProfileScreen = ({ navigation }) => {
             label="Settings"
             value="App preferences"
             onPress={() => navigation.navigate('Settings')}
+          />
+          
+          <ProfileItem
+            icon="notifications-outline"
+            label="Test Notifications"
+            value="Create sample notifications"
+            onPress={handleTestNotifications}
           />
           
           <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
@@ -292,6 +464,10 @@ const styles = StyleSheet.create({
     paddingVertical: SPACING.XL,
     marginBottom: SPACING.MD,
   },
+  avatarContainer: {
+    position: 'relative',
+    marginBottom: SPACING.MD,
+  },
   avatar: {
     width: 100,
     height: 100,
@@ -299,7 +475,36 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.PRIMARY,
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: SPACING.MD,
+    overflow: 'hidden',
+  },
+  avatarImage: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+  },
+  uploadingOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderRadius: 50,
+  },
+  cameraIcon: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: COLORS.SUCCESS,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: COLORS.WHITE,
   },
   userName: {
     fontSize: FONT_SIZES.XXL,

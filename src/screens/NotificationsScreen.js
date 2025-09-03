@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -7,7 +7,8 @@ import {
   ScrollView,
   TouchableOpacity,
   RefreshControl,
-  Alert
+  Alert,
+  ActivityIndicator
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
@@ -19,63 +20,55 @@ import {
   NOTIFICATION_TYPES
 } from '../constants';
 import Card from '../components/Card';
+import useNotifications from '../hooks/useNotifications';
 
 const NotificationsScreen = ({ navigation }) => {
   const { user } = useAuth();
-  const [notifications, setNotifications] = useState([]);
-  const [refreshing, setRefreshing] = useState(false);
   const [filter, setFilter] = useState('all'); // all, unread, appointment, health
-
-  useEffect(() => {
-    loadNotifications();
-  }, []);
-
-  const loadNotifications = async () => {
-    try {
-      // In a real app, fetch from Firebase
-      // For now, using mock data
-      setNotifications(mockNotifications);
-    } catch (error) {
-      console.error('Error loading notifications:', error);
-      setNotifications(mockNotifications);
-    }
-  };
+  
+  // Use the custom notifications hook
+  const {
+    notifications,
+    unreadCount,
+    loading,
+    error,
+    markAsRead,
+    markAllAsRead: hookMarkAllAsRead,
+    deleteNotification: hookDeleteNotification,
+    refresh,
+    hasUnread
+  } = useNotifications({
+    autoRefresh: true,
+    limitCount: 100
+  });
+  
+  const [refreshing, setRefreshing] = useState(false);
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await loadNotifications();
-    setRefreshing(false);
-  };
-
-  const markAsRead = async (notificationId) => {
     try {
-      setNotifications(prev => 
-        prev.map(notification => 
-          notification.id === notificationId 
-            ? { ...notification, read: true }
-            : notification
-        )
-      );
-      // In a real app, update Firebase
+      await refresh();
     } catch (error) {
-      console.error('Error marking notification as read:', error);
+      console.error('Error refreshing notifications:', error);
+      Alert.alert('Error', 'Failed to refresh notifications');
+    } finally {
+      setRefreshing(false);
     }
   };
 
-  const markAllAsRead = async () => {
+  const handleMarkAllAsRead = async () => {
+    if (!hasUnread) return;
+    
     try {
-      setNotifications(prev => 
-        prev.map(notification => ({ ...notification, read: true }))
-      );
-      // In a real app, update Firebase
-      Alert.alert('Success', 'All notifications marked as read');
+      const updatedCount = await hookMarkAllAsRead();
+      Alert.alert('Success', `All ${updatedCount} notifications marked as read`);
     } catch (error) {
       console.error('Error marking all as read:', error);
       Alert.alert('Error', 'Failed to mark notifications as read');
     }
   };
 
-  const deleteNotification = async (notificationId) => {
+  const handleDeleteNotification = async (notificationId) => {
     Alert.alert(
       'Delete Notification',
       'Are you sure you want to delete this notification?',
@@ -84,10 +77,13 @@ const NotificationsScreen = ({ navigation }) => {
         {
           text: 'Delete',
           style: 'destructive',
-          onPress: () => {
-            setNotifications(prev => 
-              prev.filter(notification => notification.id !== notificationId)
-            );
+          onPress: async () => {
+            try {
+              await hookDeleteNotification(notificationId);
+            } catch (error) {
+              console.error('Error deleting notification:', error);
+              Alert.alert('Error', 'Failed to delete notification');
+            }
           }
         }
       ]
@@ -167,8 +163,6 @@ const NotificationsScreen = ({ navigation }) => {
     }
   });
 
-  const unreadCount = notifications.filter(n => !n.read).length;
-
   const NotificationCard = ({ notification }) => {
     const timeAgo = getTimeAgo(notification.timestamp);
     const iconName = getNotificationIcon(notification.type);
@@ -205,7 +199,7 @@ const NotificationsScreen = ({ navigation }) => {
         
         <TouchableOpacity
           style={styles.deleteButton}
-          onPress={() => deleteNotification(notification.id)}
+          onPress={() => handleDeleteNotification(notification.id)}
         >
           <Ionicons name="close" size={20} color={COLORS.GRAY_MEDIUM} />
         </TouchableOpacity>
@@ -231,10 +225,17 @@ const NotificationsScreen = ({ navigation }) => {
     <SafeAreaView style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.title}>Notifications</Text>
+        <View style={styles.headerLeft}>
+          <Text style={styles.title}>Notifications</Text>
+          {unreadCount > 0 && (
+            <View style={styles.unreadBadge}>
+              <Text style={styles.unreadBadgeText}>{unreadCount}</Text>
+            </View>
+          )}
+        </View>
         {unreadCount > 0 && (
-          <TouchableOpacity style={styles.markAllButton} onPress={markAllAsRead}>
-            <Text style={styles.markAllText}>Mark all as read</Text>
+          <TouchableOpacity style={styles.markAllButton} onPress={handleMarkAllAsRead}>
+            <Text style={styles.markAllText}>Mark all read</Text>
           </TouchableOpacity>
         )}
       </View>
@@ -269,31 +270,39 @@ const NotificationsScreen = ({ navigation }) => {
         </ScrollView>
       </View>
 
-      {/* Notifications List */}
-      <ScrollView
-        style={styles.notificationsList}
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
-        }
-        showsVerticalScrollIndicator={false}
-      >
-        {filteredNotifications.length === 0 ? (
-          <Card style={styles.emptyState}>
-            <Ionicons name="notifications-outline" size={64} color={COLORS.GRAY_MEDIUM} />
-            <Text style={styles.emptyTitle}>No Notifications</Text>
-            <Text style={styles.emptySubtitle}>
-              {filter === 'all' 
-                ? "You're all caught up! No new notifications."
-                : `No ${filter} notifications to display.`
-              }
-            </Text>
-          </Card>
-        ) : (
-          filteredNotifications.map((notification) => (
-            <NotificationCard key={notification.id} notification={notification} />
-          ))
-        )}
-      </ScrollView>
+      {/* Loading State */}
+      {loading ? (
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={COLORS.PRIMARY} />
+          <Text style={styles.loadingText}>Loading notifications...</Text>
+        </View>
+      ) : (
+        /* Notifications List */
+        <ScrollView
+          style={styles.notificationsList}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+          }
+          showsVerticalScrollIndicator={false}
+        >
+          {filteredNotifications.length === 0 ? (
+            <Card style={styles.emptyState}>
+              <Ionicons name="notifications-outline" size={64} color={COLORS.GRAY_MEDIUM} />
+              <Text style={styles.emptyTitle}>No Notifications</Text>
+              <Text style={styles.emptySubtitle}>
+                {filter === 'all' 
+                  ? "You're all caught up! No new notifications."
+                  : `No ${filter} notifications to display.`
+                }
+              </Text>
+            </Card>
+          ) : (
+            filteredNotifications.map((notification) => (
+              <NotificationCard key={notification.id} notification={notification} />
+            ))
+          )}
+        </ScrollView>
+      )}
     </SafeAreaView>
   );
 };
@@ -384,18 +393,38 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: COLORS.BORDER,
   },
+  headerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
   title: {
     fontSize: FONT_SIZES.XXL,
     fontWeight: 'bold',
     color: COLORS.TEXT_PRIMARY,
   },
+  unreadBadge: {
+    backgroundColor: COLORS.EMERGENCY,
+    borderRadius: BORDER_RADIUS.CIRCLE,
+    minWidth: 20,
+    height: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginLeft: SPACING.SM,
+  },
+  unreadBadgeText: {
+    color: COLORS.WHITE,
+    fontSize: FONT_SIZES.XS,
+    fontWeight: 'bold',
+  },
   markAllButton: {
     paddingHorizontal: SPACING.MD,
     paddingVertical: SPACING.SM,
+    backgroundColor: COLORS.PRIMARY,
+    borderRadius: BORDER_RADIUS.SM,
   },
   markAllText: {
     fontSize: FONT_SIZES.SM,
-    color: COLORS.PRIMARY,
+    color: COLORS.WHITE,
     fontWeight: '600',
   },
   filterContainer: {
@@ -426,6 +455,17 @@ const styles = StyleSheet.create({
   notificationsList: {
     flex: 1,
     padding: SPACING.MD,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: SPACING.XL,
+  },
+  loadingText: {
+    marginTop: SPACING.MD,
+    fontSize: FONT_SIZES.MD,
+    color: COLORS.TEXT_SECONDARY,
   },
   emptyState: {
     alignItems: 'center',

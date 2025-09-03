@@ -11,9 +11,11 @@ import { Ionicons } from '@expo/vector-icons';
 import Card from '../components/Card';
 import { useAuth } from '../context/AuthContext';
 import { COLORS, FONT_SIZES, SPACING } from '../constants';
+import useNotifications from '../hooks/useNotifications';
 
 const HomeScreen = ({ navigation }) => {
   const { userProfile, isPatient, isDoctor, isEmergencyOperator } = useAuth();
+  const { unreadCount } = useNotifications({ autoRefresh: true });
 
   const quickActions = [
     {
@@ -90,9 +92,13 @@ const HomeScreen = ({ navigation }) => {
               onPress={() => navigation.navigate('Notifications')}
             >
               <Ionicons name="notifications-outline" size={24} color={COLORS.TEXT_PRIMARY} />
-              <View style={styles.notificationBadge}>
-                <Text style={styles.notificationBadgeText}>3</Text>
-              </View>
+              {unreadCount > 0 && (
+                <View style={styles.notificationBadge}>
+                  <Text style={styles.notificationBadgeText}>
+                    {unreadCount > 99 ? '99+' : unreadCount}
+                  </Text>
+                </View>
+              )}
             </TouchableOpacity>
           </View>
 

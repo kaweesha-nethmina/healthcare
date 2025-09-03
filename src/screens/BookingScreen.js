@@ -22,6 +22,7 @@ import Card from '../components/Card';
 import Button from '../components/Button';
 import { collection, addDoc } from 'firebase/firestore';
 import { db } from '../services/firebase';
+import NotificationService from '../services/notificationService';
 
 const BookingScreen = ({ navigation, route }) => {
   const { doctor } = route.params || {};
@@ -113,7 +114,24 @@ const BookingScreen = ({ navigation, route }) => {
       };
 
       // In a real app, save to Firebase
-      await addDoc(collection(db, 'appointments'), appointmentData);
+      const docRef = await addDoc(collection(db, 'appointments'), appointmentData);
+      const appointmentId = docRef.id;
+      
+      // Create notification for the patient
+      try {
+        await NotificationService.createAppointmentNotification(
+          user.uid,
+          {
+            id: appointmentId,
+            ...appointmentData
+          },
+          'created'
+        );
+        console.log('Appointment notification created successfully');
+      } catch (notificationError) {
+        console.error('Error creating notification:', notificationError);
+        // Don't fail the appointment booking if notification creation fails
+      }
       
       setLoading(false);
       
