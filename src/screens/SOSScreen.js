@@ -15,7 +15,8 @@ import {
   COLORS,
   FONT_SIZES,
   SPACING,
-  BORDER_RADIUS
+  BORDER_RADIUS,
+  EMERGENCY_STATUS
 } from '../constants';
 import Card from '../components/Card';
 import Button from '../components/Button';
@@ -109,17 +110,31 @@ const SOSScreen = ({ navigation }) => {
       const currentLocation = await LocationService.getCurrentLocation();
       setLocation(currentLocation);
       
-      // Save emergency to Firebase
+      // Save emergency to Firebase with proper structure for emergency operators
       const emergencyData = {
         userId: user.uid,
-        userName: userProfile?.name || 'Unknown User',
-        userPhone: userProfile?.phone || 'Unknown',
+        patientName: userProfile?.firstName && userProfile?.lastName ? 
+          `${userProfile.firstName} ${userProfile.lastName}` : 
+          userProfile?.name || 'Unknown User',
+        phone: userProfile?.phone || 'Unknown',
+        age: userProfile?.age || 'N/A',
+        medicalHistory: userProfile?.medicalConditions?.join(', ') || 'None',
         latitude: currentLocation.latitude,
         longitude: currentLocation.longitude,
         accuracy: currentLocation.accuracy,
+        location: `${currentLocation.latitude.toFixed(6)}, ${currentLocation.longitude.toFixed(6)}`,
         timestamp: serverTimestamp(),
-        status: 'active',
-        notes: ''
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        status: EMERGENCY_STATUS.PENDING, // Use proper status constant
+        priority: 'high', // Default priority
+        type: 'SOS Emergency',
+        description: 'Emergency SOS activated by user',
+        notes: '',
+        // Add additional fields that emergency operators expect
+        assignedUnit: null,
+        responseTime: null,
+        resolvedAt: null
       };
 
       const docRef = await addDoc(collection(db, 'emergencies'), emergencyData);
@@ -165,15 +180,15 @@ const SOSScreen = ({ navigation }) => {
           const notificationData = {
             userId: operator.uid,
             title: 'Emergency Alert',
-            message: `SOS from ${emergencyData.userName || 'Unknown User'} at location (${emergencyData.latitude.toFixed(6)}, ${emergencyData.longitude.toFixed(6)})`,
+            message: `SOS from ${emergencyData.patientName || 'Unknown User'} at location (${emergencyData.latitude.toFixed(6)}, ${emergencyData.longitude.toFixed(6)})`,
             type: 'emergency',
             category: 'emergency',
             priority: 'urgent',
             data: {
               emergencyId: emergencyId,
               userId: emergencyData.userId,
-              userName: emergencyData.userName,
-              userPhone: emergencyData.userPhone,
+              userName: emergencyData.patientName,
+              userPhone: emergencyData.phone,
               latitude: emergencyData.latitude,
               longitude: emergencyData.longitude,
               timestamp: emergencyData.timestamp
@@ -242,8 +257,9 @@ const SOSScreen = ({ navigation }) => {
         try {
           const emergencyRef = doc(db, 'emergencies', emergencyId);
           await updateDoc(emergencyRef, {
-            status: 'resolved',
-            resolvedAt: serverTimestamp()
+            status: EMERGENCY_STATUS.COMPLETED, // Use proper status constant
+            resolvedAt: serverTimestamp(),
+            updatedAt: serverTimestamp()
           });
         } catch (error) {
           console.error('Error updating emergency status:', error);
@@ -347,7 +363,7 @@ const SOSScreen = ({ navigation }) => {
           <View style={styles.infoItem}>
             <Ionicons name="person" size={20} color={COLORS.PRIMARY} />
             <Text style={styles.infoText}>
-              Name: {userProfile?.name || 'Not set'}
+              Name: {userProfile?.firstName} {userProfile?.lastName}
             </Text>
           </View>
           <View style={styles.infoItem}>

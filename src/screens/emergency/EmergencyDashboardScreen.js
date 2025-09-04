@@ -325,7 +325,7 @@ const EmergencyDashboardScreen = ({ navigation }) => {
           </View>
           <View style={styles.emergencyStatus}>
             <View style={[styles.priorityBadge, { backgroundColor: urgencyColor }]}>
-              <Text style={styles.priorityText}>{emergency.priority.toUpperCase()}</Text>
+              <Text style={styles.priorityText}>{emergency.priority ? emergency.priority.toUpperCase() : 'N/A'}</Text>
             </View>
             <Text style={styles.locationText}>{emergency.location}</Text>
           </View>

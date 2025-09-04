@@ -242,10 +242,10 @@ const SOSManagementScreen = ({ navigation }) => {
           </View>
           <View style={styles.emergencyMeta}>
             <View style={[styles.priorityBadge, { backgroundColor: getPriorityColor(emergency.priority) }]}>
-              <Text style={styles.priorityText}>{emergency.priority.toUpperCase()}</Text>
+              <Text style={styles.priorityText}>{emergency.priority ? emergency.priority.toUpperCase() : 'N/A'}</Text>
             </View>
             <View style={[styles.statusBadge, { backgroundColor: getStatusColor(emergency.status) }]}>
-              <Text style={styles.statusText}>{emergency.status.replace('_', ' ').toUpperCase()}</Text>
+              <Text style={styles.statusText}>{emergency.status ? emergency.status.replace('_', ' ').toUpperCase() : 'N/A'}</Text>
             </View>
           </View>
         </View>
@@ -376,13 +376,13 @@ const SOSManagementScreen = ({ navigation }) => {
                 <View style={styles.detailRow}>
                   <Text style={styles.detailLabel}>Priority:</Text>
                   <Text style={[styles.detailValue, { color: getPriorityColor(selectedEmergency.priority) }]}>
-                    {selectedEmergency.priority.toUpperCase()}
+                    {selectedEmergency.priority ? selectedEmergency.priority.toUpperCase() : 'N/A'}
                   </Text>
                 </View>
                 <View style={styles.detailRow}>
                   <Text style={styles.detailLabel}>Status:</Text>
                   <Text style={[styles.detailValue, { color: getStatusColor(selectedEmergency.status) }]}>
-                    {selectedEmergency.status.replace('_', ' ').toUpperCase()}
+                    {selectedEmergency.status ? selectedEmergency.status.replace('_', ' ').toUpperCase() : 'N/A'}
                   </Text>
                 </View>
                 <View style={styles.detailRow}>

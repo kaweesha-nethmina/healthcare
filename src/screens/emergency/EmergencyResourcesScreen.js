@@ -189,7 +189,7 @@ const EmergencyResourcesScreen = ({ navigation }) => {
             />
             <Text style={styles.resourceName}>{resource.name}</Text>
           </View>
-          <Text style={styles.resourceCategory}>{resource.category.toUpperCase()}</Text>
+          <Text style={styles.resourceCategory}>{resource.category ? resource.category.toUpperCase() : 'N/A'}</Text>
           <Text style={styles.resourceDescription}>{resource.description}</Text>
           <Text style={styles.resourceLocation}>📍 {resource.location}</Text>
         </View>
