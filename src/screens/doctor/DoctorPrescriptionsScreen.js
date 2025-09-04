@@ -14,6 +14,19 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../context/AuthContext';
 import {
+  collection,
+  query,
+  where,
+  getDocs,
+  addDoc,
+  updateDoc,
+  doc,
+  serverTimestamp,
+  getDoc
+} from 'firebase/firestore';
+import { db } from '../../services/firebase';
+import { NotificationService } from '../../services/notificationService';
+import {
   COLORS,
   FONT_SIZES,
   SPACING,
@@ -31,14 +44,27 @@ const DoctorPrescriptionsScreen = ({ navigation, route }) => {
   const [filterStatus, setFilterStatus] = useState('active'); // active, expired, all
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
+  const [showDetailModal, setShowDetailModal] = useState(false);
   const [selectedPrescription, setSelectedPrescription] = useState(null);
+  const [prescriptionItems, setPrescriptionItems] = useState([{ 
+    medicationName: '', 
+    dosage: '', 
+    frequency: '', 
+    instructions: '', 
+    duration: '30',
+    refills: '2'
+  }]); // For multiple drugs
+  const [detailPrescription, setDetailPrescription] = useState(null);
 
   useEffect(() => {
     loadPrescriptions();
+  }, [patientId]);
+
+  useEffect(() => {
     if (action === 'create') {
       setShowCreateModal(true);
     }
-  }, []);
+  }, [action]);
 
   const loadPrescriptions = async () => {
     try {
@@ -139,6 +165,25 @@ const DoctorPrescriptionsScreen = ({ navigation, route }) => {
       };
       
       setPrescriptions(prev => [prescriptionWithId, ...prev]);
+      
+      // Send notification to patient
+      try {
+        await NotificationService.createPrescriptionNotification(
+          patientId, 
+          {
+            id: docRef.id,
+            doctorName: `Dr. ${userProfile?.firstName} ${userProfile?.lastName}`,
+            medicationName: prescriptionData.medicationName,
+            dosage: prescriptionData.dosage,
+            frequency: prescriptionData.frequency,
+            createdAt: new Date().toISOString()
+          }
+        );
+        console.log('Prescription notification sent to patient');
+      } catch (notificationError) {
+        console.error('Error sending prescription notification:', notificationError);
+      }
+      
       setShowCreateModal(false);
       Alert.alert('Success', 'Prescription created successfully');
     } catch (error) {
@@ -166,8 +211,37 @@ const DoctorPrescriptionsScreen = ({ navigation, route }) => {
     }
   };
 
+  const viewPrescriptionDetails = async (prescription) => {
+    try {
+      // Get the latest prescription data from Firebase
+      const prescriptionRef = doc(db, 'prescriptions', prescription.id);
+      const prescriptionDoc = await getDoc(prescriptionRef);
+      
+      if (prescriptionDoc.exists()) {
+        const prescriptionData = {
+          id: prescriptionDoc.id,
+          ...prescriptionDoc.data()
+        };
+        setDetailPrescription(prescriptionData);
+        setShowDetailModal(true);
+      }
+    } catch (error) {
+      console.error('Error fetching prescription details:', error);
+      Alert.alert('Error', 'Failed to fetch prescription details');
+    }
+  };
+
+  const openEditModal = (prescription) => {
+    setSelectedPrescription(prescription);
+    setShowDetailModal(false);
+    setShowEditModal(true);
+  };
+
   const handlePrescriptionAction = (prescription, action) => {
     switch (action) {
+      case 'view':
+        viewPrescriptionDetails(prescription);
+        break;
       case 'edit':
         setSelectedPrescription(prescription);
         setShowEditModal(true);
@@ -254,46 +328,56 @@ const DoctorPrescriptionsScreen = ({ navigation, route }) => {
 
     return (
       <Card style={styles.prescriptionCard}>
-        <View style={styles.prescriptionHeader}>
-          <View style={styles.medicationInfo}>
-            <View style={[styles.medicationIcon, { backgroundColor: statusColor }]}>
-              <Ionicons name="medical" size={20} color={COLORS.WHITE} />
+        <TouchableOpacity onPress={() => viewPrescriptionDetails(prescription)}>
+          <View style={styles.prescriptionHeader}>
+            <View style={styles.medicationInfo}>
+              <View style={[styles.medicationIcon, { backgroundColor: statusColor }]}>
+                <Ionicons name="medical" size={20} color={COLORS.WHITE} />
+              </View>
+              <View style={styles.prescriptionDetails}>
+                <Text style={styles.medicationName}>{prescription.medicationName}</Text>
+                <Text style={styles.patientName}>{prescription.patientName}</Text>
+                <Text style={styles.prescriptionMeta}>
+                  {prescription.dosage} • {prescription.frequency}
+                </Text>
+              </View>
             </View>
-            <View style={styles.prescriptionDetails}>
-              <Text style={styles.medicationName}>{prescription.medicationName}</Text>
-              <Text style={styles.patientName}>{prescription.patientName}</Text>
-              <Text style={styles.prescriptionMeta}>
-                {prescription.dosage} • {prescription.frequency}
-              </Text>
+            <View style={styles.statusContainer}>
+              <View style={[styles.statusBadge, { backgroundColor: statusColor }]}>
+                <Text style={styles.statusText}>
+                  {status.charAt(0).toUpperCase() + status.replace('-', ' ').slice(1)}
+                </Text>
+              </View>
             </View>
           </View>
-          <View style={styles.statusContainer}>
-            <View style={[styles.statusBadge, { backgroundColor: statusColor }]}>
-              <Text style={styles.statusText}>
-                {status.charAt(0).toUpperCase() + status.replace('-', ' ').slice(1)}
-              </Text>
-            </View>
-          </View>
-        </View>
 
-        <View style={styles.prescriptionInfo}>
-          <View style={styles.infoRow}>
-            <Text style={styles.infoLabel}>Instructions:</Text>
-            <Text style={styles.infoValue}>{prescription.instructions}</Text>
+          <View style={styles.prescriptionInfo}>
+            <View style={styles.infoRow}>
+              <Text style={styles.infoLabel}>Instructions:</Text>
+              <Text style={styles.infoValue}>{prescription.instructions}</Text>
+            </View>
+            <View style={styles.infoRow}>
+              <Text style={styles.infoLabel}>Duration:</Text>
+              <Text style={styles.infoValue}>
+                {new Date(prescription.startDate).toLocaleDateString()} - {new Date(prescription.endDate).toLocaleDateString()}
+              </Text>
+            </View>
+            <View style={styles.infoRow}>
+              <Text style={styles.infoLabel}>Refills Remaining:</Text>
+              <Text style={styles.infoValue}>{prescription.refillsRemaining}</Text>
+            </View>
           </View>
-          <View style={styles.infoRow}>
-            <Text style={styles.infoLabel}>Duration:</Text>
-            <Text style={styles.infoValue}>
-              {new Date(prescription.startDate).toLocaleDateString()} - {new Date(prescription.endDate).toLocaleDateString()}
-            </Text>
-          </View>
-          <View style={styles.infoRow}>
-            <Text style={styles.infoLabel}>Refills Remaining:</Text>
-            <Text style={styles.infoValue}>{prescription.refillsRemaining}</Text>
-          </View>
-        </View>
+        </TouchableOpacity>
 
         <View style={styles.prescriptionActions}>
+          <TouchableOpacity
+            style={styles.actionButton}
+            onPress={() => viewPrescriptionDetails(prescription)}
+          >
+            <Ionicons name="eye-outline" size={18} color={COLORS.INFO} />
+            <Text style={[styles.actionText, { color: COLORS.INFO }]}>View</Text>
+          </TouchableOpacity>
+
           <TouchableOpacity
             style={styles.actionButton}
             onPress={() => handlePrescriptionAction(prescription, 'edit')}
@@ -337,30 +421,86 @@ const DoctorPrescriptionsScreen = ({ navigation, route }) => {
   };
 
   const CreatePrescriptionModal = () => {
-    const [formData, setFormData] = useState({
-      medicationName: selectedPrescription?.medicationName || '',
-      dosage: selectedPrescription?.dosage || '',
-      frequency: selectedPrescription?.frequency || '',
-      instructions: selectedPrescription?.instructions || '',
-      startDate: new Date().toISOString().split('T')[0],
-      duration: '30', // days
-      refills: '2'
-    });
+    const [prescriptionItems, setPrescriptionItems] = useState([{ 
+      medicationName: selectedPrescription?.medicationName || '', 
+      dosage: selectedPrescription?.dosage || '', 
+      frequency: selectedPrescription?.frequency || '', 
+      instructions: selectedPrescription?.instructions || '', 
+      duration: selectedPrescription?.duration || '30',
+      refills: selectedPrescription?.refills || '2'
+    }]);
 
-    const handleSubmit = () => {
-      if (!formData.medicationName || !formData.dosage || !formData.frequency) {
-        Alert.alert('Error', 'Please fill in all required fields');
-        return;
+    const addPrescriptionItem = () => {
+      setPrescriptionItems([...prescriptionItems, { 
+        medicationName: '', 
+        dosage: '', 
+        frequency: '', 
+        instructions: '', 
+        duration: '30',
+        refills: '2'
+      }]);
+    };
+
+    const removePrescriptionItem = (index) => {
+      if (prescriptionItems.length > 1) {
+        const newItems = [...prescriptionItems];
+        newItems.splice(index, 1);
+        setPrescriptionItems(newItems);
+      }
+    };
+
+    const updatePrescriptionItem = (index, field, value) => {
+      const newItems = [...prescriptionItems];
+      newItems[index][field] = value;
+      setPrescriptionItems(newItems);
+    };
+
+    const handleSubmit = async () => {
+      // Validate all items
+      for (const item of prescriptionItems) {
+        if (!item.medicationName || !item.dosage || !item.frequency) {
+          Alert.alert('Error', 'Please fill in all required fields for all medications');
+          return;
+        }
       }
 
-      const endDate = new Date();
-      endDate.setDate(endDate.getDate() + parseInt(formData.duration));
+      try {
+        // Create prescriptions for all items
+        for (const item of prescriptionItems) {
+          const endDate = new Date();
+          endDate.setDate(endDate.getDate() + parseInt(item.duration));
 
-      createPrescription({
-        ...formData,
-        endDate: endDate.toISOString(),
-        refills: parseInt(formData.refills)
-      });
+          const prescriptionData = {
+            medicationName: item.medicationName,
+            dosage: item.dosage,
+            frequency: item.frequency,
+            instructions: item.instructions,
+            startDate: new Date().toISOString(),
+            endDate: endDate.toISOString(),
+            duration: parseInt(item.duration),
+            refills: parseInt(item.refills),
+            refillsRemaining: parseInt(item.refills)
+          };
+
+          await createPrescription(prescriptionData);
+        }
+
+        // Close modal and reset
+        setShowCreateModal(false);
+        setPrescriptionItems([{ 
+          medicationName: '', 
+          dosage: '', 
+          frequency: '', 
+          instructions: '', 
+          duration: '30',
+          refills: '2'
+        }]);
+        
+        Alert.alert('Success', 'All prescriptions created successfully');
+      } catch (error) {
+        console.error('Error creating prescriptions:', error);
+        Alert.alert('Error', 'Failed to create prescriptions');
+      }
     };
 
     return (
@@ -368,7 +508,17 @@ const DoctorPrescriptionsScreen = ({ navigation, route }) => {
         visible={showCreateModal}
         animationType="slide"
         transparent={true}
-        onRequestClose={() => setShowCreateModal(false)}
+        onRequestClose={() => {
+          setShowCreateModal(false);
+          setPrescriptionItems([{ 
+            medicationName: '', 
+            dosage: '', 
+            frequency: '', 
+            instructions: '', 
+            duration: '30',
+            refills: '2'
+          }]);
+        }}
       >
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
@@ -376,7 +526,17 @@ const DoctorPrescriptionsScreen = ({ navigation, route }) => {
               <Text style={styles.modalTitle}>
                 {selectedPrescription ? 'Renew Prescription' : 'Create Prescription'}
               </Text>
-              <TouchableOpacity onPress={() => setShowCreateModal(false)}>
+              <TouchableOpacity onPress={() => {
+                setShowCreateModal(false);
+                setPrescriptionItems([{ 
+                  medicationName: '', 
+                  dosage: '', 
+                  frequency: '', 
+                  instructions: '', 
+                  duration: '30',
+                  refills: '2'
+                }]);
+              }}>
                 <Ionicons name="close" size={24} color={COLORS.TEXT_PRIMARY} />
               </TouchableOpacity>
             </View>
@@ -386,83 +546,116 @@ const DoctorPrescriptionsScreen = ({ navigation, route }) => {
             )}
 
             <ScrollView style={styles.formContainer} showsVerticalScrollIndicator={false}>
-              <View style={styles.inputGroup}>
-                <Text style={styles.inputLabel}>Medication Name *</Text>
-                <TextInput
-                  style={styles.textInput}
-                  value={formData.medicationName}
-                  onChangeText={(text) => setFormData(prev => ({ ...prev, medicationName: text }))}
-                  placeholder="Enter medication name"
-                  placeholderTextColor={COLORS.GRAY_MEDIUM}
-                />
-              </View>
+              {prescriptionItems.map((item, index) => (
+                <View key={index} style={styles.prescriptionItemContainer}>
+                  {prescriptionItems.length > 1 && (
+                    <TouchableOpacity 
+                      style={styles.removeButton}
+                      onPress={() => removePrescriptionItem(index)}
+                    >
+                      <Ionicons name="close-circle" size={24} color={COLORS.ERROR} />
+                    </TouchableOpacity>
+                  )}
+                  
+                  <View style={styles.inputGroup}>
+                    <Text style={styles.inputLabel}>Medication Name *</Text>
+                    <TextInput
+                      style={styles.textInput}
+                      value={item.medicationName}
+                      onChangeText={(text) => updatePrescriptionItem(index, 'medicationName', text)}
+                      placeholder="Enter medication name"
+                      placeholderTextColor={COLORS.GRAY_MEDIUM}
+                    />
+                  </View>
 
-              <View style={styles.inputRow}>
-                <View style={[styles.inputGroup, { flex: 1, marginRight: SPACING.SM }]}>
-                  <Text style={styles.inputLabel}>Dosage *</Text>
-                  <TextInput
-                    style={styles.textInput}
-                    value={formData.dosage}
-                    onChangeText={(text) => setFormData(prev => ({ ...prev, dosage: text }))}
-                    placeholder="e.g., 10mg"
-                    placeholderTextColor={COLORS.GRAY_MEDIUM}
-                  />
-                </View>
-                <View style={[styles.inputGroup, { flex: 1, marginLeft: SPACING.SM }]}>
-                  <Text style={styles.inputLabel}>Frequency *</Text>
-                  <TextInput
-                    style={styles.textInput}
-                    value={formData.frequency}
-                    onChangeText={(text) => setFormData(prev => ({ ...prev, frequency: text }))}
-                    placeholder="e.g., Twice daily"
-                    placeholderTextColor={COLORS.GRAY_MEDIUM}
-                  />
-                </View>
-              </View>
+                  <View style={styles.inputRow}>
+                    <View style={[styles.inputGroup, { flex: 1, marginRight: SPACING.SM }]}>
+                      <Text style={styles.inputLabel}>Dosage *</Text>
+                      <TextInput
+                        style={styles.textInput}
+                        value={item.dosage}
+                        onChangeText={(text) => updatePrescriptionItem(index, 'dosage', text)}
+                        placeholder="e.g., 10mg"
+                        placeholderTextColor={COLORS.GRAY_MEDIUM}
+                      />
+                    </View>
+                    <View style={[styles.inputGroup, { flex: 1, marginLeft: SPACING.SM }]}>
+                      <Text style={styles.inputLabel}>Frequency *</Text>
+                      <TextInput
+                        style={styles.textInput}
+                        value={item.frequency}
+                        onChangeText={(text) => updatePrescriptionItem(index, 'frequency', text)}
+                        placeholder="e.g., Twice daily"
+                        placeholderTextColor={COLORS.GRAY_MEDIUM}
+                      />
+                    </View>
+                  </View>
 
-              <View style={styles.inputGroup}>
-                <Text style={styles.inputLabel}>Instructions</Text>
-                <TextInput
-                  style={[styles.textInput, styles.textArea]}
-                  value={formData.instructions}
-                  onChangeText={(text) => setFormData(prev => ({ ...prev, instructions: text }))}
-                  placeholder="Special instructions for the patient"
-                  multiline
-                  numberOfLines={3}
-                  placeholderTextColor={COLORS.GRAY_MEDIUM}
-                />
-              </View>
+                  <View style={styles.inputGroup}>
+                    <Text style={styles.inputLabel}>Instructions</Text>
+                    <TextInput
+                      style={[styles.textInput, styles.textArea]}
+                      value={item.instructions}
+                      onChangeText={(text) => updatePrescriptionItem(index, 'instructions', text)}
+                      placeholder="Special instructions for the patient"
+                      multiline
+                      numberOfLines={3}
+                      placeholderTextColor={COLORS.GRAY_MEDIUM}
+                    />
+                  </View>
 
-              <View style={styles.inputRow}>
-                <View style={[styles.inputGroup, { flex: 1, marginRight: SPACING.SM }]}>
-                  <Text style={styles.inputLabel}>Duration (days)</Text>
-                  <TextInput
-                    style={styles.textInput}
-                    value={formData.duration}
-                    onChangeText={(text) => setFormData(prev => ({ ...prev, duration: text }))}
-                    placeholder="30"
-                    keyboardType="numeric"
-                    placeholderTextColor={COLORS.GRAY_MEDIUM}
-                  />
+                  <View style={styles.inputRow}>
+                    <View style={[styles.inputGroup, { flex: 1, marginRight: SPACING.SM }]}>
+                      <Text style={styles.inputLabel}>Duration (days)</Text>
+                      <TextInput
+                        style={styles.textInput}
+                        value={item.duration.toString()}
+                        onChangeText={(text) => updatePrescriptionItem(index, 'duration', text)}
+                        placeholder="30"
+                        keyboardType="numeric"
+                        placeholderTextColor={COLORS.GRAY_MEDIUM}
+                      />
+                    </View>
+                    <View style={[styles.inputGroup, { flex: 1, marginLeft: SPACING.SM }]}>
+                      <Text style={styles.inputLabel}>Refills</Text>
+                      <TextInput
+                        style={styles.textInput}
+                        value={item.refills.toString()}
+                        onChangeText={(text) => updatePrescriptionItem(index, 'refills', text)}
+                        placeholder="2"
+                        keyboardType="numeric"
+                        placeholderTextColor={COLORS.GRAY_MEDIUM}
+                      />
+                    </View>
+                  </View>
+                  
+                  {index === prescriptionItems.length - 1 && (
+                    <TouchableOpacity 
+                      style={styles.addButton}
+                      onPress={addPrescriptionItem}
+                    >
+                      <Ionicons name="add-circle" size={24} color={COLORS.PRIMARY} />
+                      <Text style={styles.addButtonText}>Add Another Medication</Text>
+                    </TouchableOpacity>
+                  )}
                 </View>
-                <View style={[styles.inputGroup, { flex: 1, marginLeft: SPACING.SM }]}>
-                  <Text style={styles.inputLabel}>Refills</Text>
-                  <TextInput
-                    style={styles.textInput}
-                    value={formData.refills}
-                    onChangeText={(text) => setFormData(prev => ({ ...prev, refills: text }))}
-                    placeholder="2"
-                    keyboardType="numeric"
-                    placeholderTextColor={COLORS.GRAY_MEDIUM}
-                  />
-                </View>
-              </View>
+              ))}
             </ScrollView>
 
             <View style={styles.modalActions}>
               <Button
                 title="Cancel"
-                onPress={() => setShowCreateModal(false)}
+                onPress={() => {
+                  setShowCreateModal(false);
+                  setPrescriptionItems([{ 
+                    medicationName: '', 
+                    dosage: '', 
+                    frequency: '', 
+                    instructions: '', 
+                    duration: '30',
+                    refills: '2'
+                  }]);
+                }}
                 style={styles.modalActionButton}
                 variant="outline"
               />
@@ -477,6 +670,262 @@ const DoctorPrescriptionsScreen = ({ navigation, route }) => {
       </Modal>
     );
   };
+
+  const EditPrescriptionModal = () => {
+    const [editFormData, setEditFormData] = useState({
+      medicationName: selectedPrescription?.medicationName || '',
+      dosage: selectedPrescription?.dosage || '',
+      frequency: selectedPrescription?.frequency || '',
+      instructions: selectedPrescription?.instructions || '',
+      startDate: selectedPrescription?.startDate || new Date().toISOString().split('T')[0],
+      endDate: selectedPrescription?.endDate || new Date().toISOString().split('T')[0],
+      refills: selectedPrescription?.refills?.toString() || '0'
+    });
+
+    useEffect(() => {
+      if (selectedPrescription) {
+        setEditFormData({
+          medicationName: selectedPrescription.medicationName || '',
+          dosage: selectedPrescription.dosage || '',
+          frequency: selectedPrescription.frequency || '',
+          instructions: selectedPrescription.instructions || '',
+          startDate: selectedPrescription.startDate || new Date().toISOString().split('T')[0],
+          endDate: selectedPrescription.endDate || new Date().toISOString().split('T')[0],
+          refills: selectedPrescription.refills?.toString() || '0'
+        });
+      }
+    }, [selectedPrescription]);
+
+    const handleSubmit = async () => {
+      if (!editFormData.medicationName || !editFormData.dosage || !editFormData.frequency) {
+        Alert.alert('Error', 'Please fill in all required fields');
+        return;
+      }
+
+      try {
+        await updatePrescription({
+          medicationName: editFormData.medicationName,
+          dosage: editFormData.dosage,
+          frequency: editFormData.frequency,
+          instructions: editFormData.instructions,
+          startDate: editFormData.startDate,
+          endDate: editFormData.endDate,
+          refills: parseInt(editFormData.refills),
+          refillsRemaining: parseInt(editFormData.refills)
+        });
+      } catch (error) {
+        console.error('Error updating prescription:', error);
+        Alert.alert('Error', 'Failed to update prescription');
+      }
+    };
+
+    return (
+      <Modal
+        visible={showEditModal}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setShowEditModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Edit Prescription</Text>
+              <TouchableOpacity onPress={() => setShowEditModal(false)}>
+                <Ionicons name="close" size={24} color={COLORS.TEXT_PRIMARY} />
+              </TouchableOpacity>
+            </View>
+
+            {selectedPrescription && patientName && (
+              <Text style={styles.modalSubtitle}>Patient: {patientName}</Text>
+            )}
+
+            <ScrollView style={styles.formContainer} showsVerticalScrollIndicator={false}>
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>Medication Name *</Text>
+                <TextInput
+                  style={styles.textInput}
+                  value={editFormData.medicationName}
+                  onChangeText={(text) => setEditFormData({...editFormData, medicationName: text})}
+                  placeholder="Enter medication name"
+                  placeholderTextColor={COLORS.GRAY_MEDIUM}
+                />
+              </View>
+
+              <View style={styles.inputRow}>
+                <View style={[styles.inputGroup, { flex: 1, marginRight: SPACING.SM }]}>
+                  <Text style={styles.inputLabel}>Dosage *</Text>
+                  <TextInput
+                    style={styles.textInput}
+                    value={editFormData.dosage}
+                    onChangeText={(text) => setEditFormData({...editFormData, dosage: text})}
+                    placeholder="e.g., 10mg"
+                    placeholderTextColor={COLORS.GRAY_MEDIUM}
+                  />
+                </View>
+                <View style={[styles.inputGroup, { flex: 1, marginLeft: SPACING.SM }]}>
+                  <Text style={styles.inputLabel}>Frequency *</Text>
+                  <TextInput
+                    style={styles.textInput}
+                    value={editFormData.frequency}
+                    onChangeText={(text) => setEditFormData({...editFormData, frequency: text})}
+                    placeholder="e.g., Twice daily"
+                    placeholderTextColor={COLORS.GRAY_MEDIUM}
+                  />
+                </View>
+              </View>
+
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>Instructions</Text>
+                <TextInput
+                  style={[styles.textInput, styles.textArea]}
+                  value={editFormData.instructions}
+                  onChangeText={(text) => setEditFormData({...editFormData, instructions: text})}
+                  placeholder="Special instructions for the patient"
+                  multiline
+                  numberOfLines={3}
+                  placeholderTextColor={COLORS.GRAY_MEDIUM}
+                />
+              </View>
+
+              <View style={styles.inputRow}>
+                <View style={[styles.inputGroup, { flex: 1, marginRight: SPACING.SM }]}>
+                  <Text style={styles.inputLabel}>Start Date</Text>
+                  <TextInput
+                    style={styles.textInput}
+                    value={editFormData.startDate}
+                    onChangeText={(text) => setEditFormData({...editFormData, startDate: text})}
+                    placeholder="YYYY-MM-DD"
+                    placeholderTextColor={COLORS.GRAY_MEDIUM}
+                  />
+                </View>
+                <View style={[styles.inputGroup, { flex: 1, marginLeft: SPACING.SM }]}>
+                  <Text style={styles.inputLabel}>End Date</Text>
+                  <TextInput
+                    style={styles.textInput}
+                    value={editFormData.endDate}
+                    onChangeText={(text) => setEditFormData({...editFormData, endDate: text})}
+                    placeholder="YYYY-MM-DD"
+                    placeholderTextColor={COLORS.GRAY_MEDIUM}
+                  />
+                </View>
+              </View>
+
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>Refills</Text>
+                <TextInput
+                  style={styles.textInput}
+                  value={editFormData.refills}
+                  onChangeText={(text) => setEditFormData({...editFormData, refills: text})}
+                  placeholder="Number of refills"
+                  keyboardType="numeric"
+                  placeholderTextColor={COLORS.GRAY_MEDIUM}
+                />
+              </View>
+            </ScrollView>
+
+            <View style={styles.modalActions}>
+              <Button
+                title="Cancel"
+                onPress={() => setShowEditModal(false)}
+                style={styles.modalActionButton}
+                variant="outline"
+              />
+              <Button
+                title="Save Changes"
+                onPress={handleSubmit}
+                style={styles.modalActionButton}
+              />
+            </View>
+          </View>
+        </View>
+      </Modal>
+    );
+  };
+
+  const PrescriptionDetailModal = () => (
+    <Modal
+      visible={showDetailModal}
+      animationType="slide"
+      presentationStyle="pageSheet"
+      onRequestClose={() => setShowDetailModal(false)}
+    >
+      <SafeAreaView style={styles.modalContainer}>
+        <View style={styles.modalHeader}>
+          <Text style={styles.modalTitle}>Prescription Details</Text>
+          <TouchableOpacity
+            style={styles.closeButton}
+            onPress={() => setShowDetailModal(false)}
+          >
+            <Ionicons name="close" size={24} color={COLORS.TEXT_PRIMARY} />
+          </TouchableOpacity>
+        </View>
+        
+        {detailPrescription && (
+          <ScrollView style={styles.modalContent}>
+            <Card style={styles.detailCard}>
+              <Text style={styles.detailMedicationName}>
+                {detailPrescription.medicationName}
+              </Text>
+              <Text style={styles.detailDosage}>{detailPrescription.dosage}</Text>
+              
+              <View style={styles.detailSection}>
+                <Text style={styles.detailSectionTitle}>Instructions</Text>
+                <Text style={styles.detailText}>{detailPrescription.instructions}</Text>
+              </View>
+              
+              <View style={styles.detailSection}>
+                <Text style={styles.detailSectionTitle}>Frequency</Text>
+                <Text style={styles.detailText}>{detailPrescription.frequency}</Text>
+              </View>
+              
+              <View style={styles.detailSection}>
+                <Text style={styles.detailSectionTitle}>Duration</Text>
+                <Text style={styles.detailText}>
+                  {new Date(detailPrescription.startDate).toLocaleDateString()} to {new Date(detailPrescription.endDate).toLocaleDateString()}
+                </Text>
+              </View>
+              
+              <View style={styles.detailSection}>
+                <Text style={styles.detailSectionTitle}>Prescribed For</Text>
+                <Text style={styles.detailText}>
+                  {detailPrescription.patientName}
+                </Text>
+              </View>
+              
+              <View style={styles.detailSection}>
+                <Text style={styles.detailSectionTitle}>Prescribed By</Text>
+                <Text style={styles.detailText}>
+                  {detailPrescription.doctorName}
+                </Text>
+              </View>
+              
+              <View style={styles.detailSection}>
+                <Text style={styles.detailSectionTitle}>Refills</Text>
+                <Text style={styles.detailText}>
+                  {detailPrescription.refillsRemaining} of {detailPrescription.refills} refills remaining
+                </Text>
+              </View>
+              
+              {/* Show edit button only if prescription is not expired */}
+              {new Date(detailPrescription.endDate) > new Date() && (
+                <View style={styles.editButtonContainer}>
+                  <Button
+                    title="Edit Prescription"
+                    onPress={() => {
+                      setShowDetailModal(false);
+                      setSelectedPrescription(detailPrescription);
+                      setShowEditModal(true);
+                    }}
+                    style={styles.editButton}
+                  />
+                </View>
+              )}
+            </Card>
+          </ScrollView>
+        )}
+      </SafeAreaView>
+    </Modal>
+  );
 
   const getStatusCounts = () => {
     return {
@@ -575,6 +1024,8 @@ const DoctorPrescriptionsScreen = ({ navigation, route }) => {
       </TouchableOpacity>
 
       <CreatePrescriptionModal />
+      <EditPrescriptionModal />
+      <PrescriptionDetailModal />
     </SafeAreaView>
   );
 };
@@ -814,6 +1265,19 @@ const styles = StyleSheet.create({
   formContainer: {
     maxHeight: 400,
   },
+  prescriptionItemContainer: {
+    position: 'relative',
+    marginBottom: SPACING.MD,
+    padding: SPACING.SM,
+    backgroundColor: COLORS.GRAY_LIGHT,
+    borderRadius: BORDER_RADIUS.MD,
+  },
+  removeButton: {
+    position: 'absolute',
+    top: -10,
+    right: -10,
+    zIndex: 1,
+  },
   inputGroup: {
     marginBottom: SPACING.MD,
   },
@@ -841,6 +1305,19 @@ const styles = StyleSheet.create({
     height: 80,
     textAlignVertical: 'top',
   },
+  addButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: SPACING.MD,
+    marginBottom: SPACING.MD,
+  },
+  addButtonText: {
+    fontSize: FONT_SIZES.MD,
+    color: COLORS.PRIMARY,
+    fontWeight: '600',
+    marginLeft: SPACING.SM,
+  },
   modalActions: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -849,6 +1326,71 @@ const styles = StyleSheet.create({
   modalActionButton: {
     flex: 1,
     marginHorizontal: SPACING.XS,
+  },
+  modalContainer: {
+    flex: 1,
+    backgroundColor: COLORS.BACKGROUND,
+  },
+  modalContent: {
+    flex: 1,
+    padding: SPACING.MD,
+  },
+  closeButton: {
+    padding: SPACING.SM,
+  },
+  detailCard: {
+    padding: SPACING.LG,
+    marginBottom: SPACING.MD,
+  },
+  detailMedicationName: {
+    fontSize: FONT_SIZES.XL,
+    fontWeight: 'bold',
+    color: COLORS.TEXT_PRIMARY,
+    marginBottom: SPACING.SM,
+  },
+  detailDosage: {
+    fontSize: FONT_SIZES.MD,
+    color: COLORS.PRIMARY,
+    marginBottom: SPACING.LG,
+  },
+  detailSection: {
+    marginBottom: SPACING.MD,
+  },
+  detailSectionTitle: {
+    fontSize: FONT_SIZES.MD,
+    fontWeight: '600',
+    color: COLORS.TEXT_PRIMARY,
+    marginBottom: SPACING.XS,
+  },
+  detailText: {
+    fontSize: FONT_SIZES.MD,
+    color: COLORS.TEXT_SECONDARY,
+    lineHeight: 20,
+  },
+  detailSubtext: {
+    fontSize: FONT_SIZES.SM,
+    color: COLORS.GRAY_MEDIUM,
+    marginTop: SPACING.XS,
+  },
+  editButtonContainer: {
+    marginTop: SPACING.LG,
+    alignItems: 'center',
+  },
+  editButton: {
+    width: '100%',
+  },
+  buttonContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: SPACING.LG,
+  },
+  cancelButton: {
+    flex: 1,
+    marginRight: SPACING.SM,
+  },
+  saveButton: {
+    flex: 1,
+    marginLeft: SPACING.SM,
   },
 });
 

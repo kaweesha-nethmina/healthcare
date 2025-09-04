@@ -134,7 +134,7 @@ const HomeScreen = ({ navigation }) => {
       subtitle: 'View your history',
       icon: 'folder',
       color: COLORS.SUCCESS,
-      onPress: () => navigation.navigate('Health Records', { screen: 'MedicalHistory' }),
+      onPress: () => navigation.navigate('Health Records', { screen: 'HealthRecordsMain' }),
       show: true
     },
     {
@@ -287,6 +287,28 @@ const HomeScreen = ({ navigation }) => {
             </Card>
           </View>
 
+          {/* Health Records Card - Only visible for patients */}
+          {isPatient && (
+            <View style={styles.section}>
+              <TouchableOpacity 
+                onPress={() => navigation.navigate('Health Records', { screen: 'HealthRecordsMain' })}
+              >
+                <Card style={styles.healthRecordsCard}>
+                  <View style={styles.healthRecordsContent}>
+                    <View style={styles.healthRecordsIcon}>
+                      <Ionicons name="folder" size={24} color={COLORS.WHITE} />
+                    </View>
+                    <View style={styles.healthRecordsText}>
+                      <Text style={styles.healthRecordsTitle}>Health Records</Text>
+                      <Text style={styles.healthRecordsDescription}>View your medical history and documents</Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={20} color={COLORS.GRAY_MEDIUM} />
+                  </View>
+                </Card>
+              </TouchableOpacity>
+            </View>
+          )}
+
           {/* Health Tips */}
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Health Tip of the Day</Text>
@@ -431,6 +453,37 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZES.MD,
     color: COLORS.TEXT_SECONDARY,
     marginLeft: SPACING.SM,
+  },
+  healthRecordsCard: {
+    padding: 0,
+  },
+  healthRecordsContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: SPACING.MD,
+    paddingHorizontal: SPACING.MD,
+  },
+  healthRecordsIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: COLORS.SUCCESS,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: SPACING.MD,
+  },
+  healthRecordsText: {
+    flex: 1,
+  },
+  healthRecordsTitle: {
+    fontSize: FONT_SIZES.MD,
+    fontWeight: '600',
+    color: COLORS.TEXT_PRIMARY,
+    marginBottom: SPACING.XS / 2,
+  },
+  healthRecordsDescription: {
+    fontSize: FONT_SIZES.SM,
+    color: COLORS.TEXT_SECONDARY,
   },
   healthTipCard: {
     padding: SPACING.LG,

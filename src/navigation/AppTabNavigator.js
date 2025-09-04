@@ -312,6 +312,10 @@ const AppTabNavigator = () => {
         }}
       />
       <Tab.Screen 
+        name="Health Records" 
+        component={HealthRecordsStackNavigator}
+      />
+      <Tab.Screen 
         name="Profile" 
         component={ProfileStackNavigator}
       />

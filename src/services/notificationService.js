@@ -91,6 +91,31 @@ export class NotificationService {
   }
 
   /**
+   * Create prescription-related notifications
+   */
+  static async createPrescriptionNotification(userId, prescriptionData) {
+    const notificationData = {
+      title: 'New Prescription',
+      message: `Dr. ${prescriptionData.doctorName} has prescribed ${prescriptionData.medicationName}`,
+      type: NOTIFICATION_TYPES.CONSULTATION,
+      category: 'prescription',
+      priority: 'normal',
+      data: {
+        prescriptionId: prescriptionData.id,
+        doctorName: prescriptionData.doctorName,
+        medicationName: prescriptionData.medicationName,
+        dosage: prescriptionData.dosage,
+        frequency: prescriptionData.frequency,
+        prescriptionDate: prescriptionData.createdAt,
+        type: 'prescription'
+      },
+      actionUrl: `/prescription/${prescriptionData.id}`
+    };
+
+    return this.createNotification(userId, notificationData);
+  }
+
+  /**
    * Create appointment-related notifications
    */
   static async createAppointmentNotification(userId, appointmentData, type = 'created') {

@@ -12,6 +12,14 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
 import {
+  collection,
+  query,
+  where,
+  getDocs,
+  orderBy
+} from 'firebase/firestore';
+import { db } from '../services/firebase';
+import {
   COLORS,
   FONT_SIZES,
   SPACING,
@@ -34,6 +42,7 @@ const MedicalHistoryScreen = ({ navigation }) => {
     try {
       // Fetch medical history from Firebase
       if (user && user.uid) {
+        // Fetch from user's medicalHistory subcollection
         // Removed orderBy to avoid composite index requirement
         const medicalHistoryQuery = query(
           collection(db, 'users', user.uid, 'medicalHistory')
@@ -49,10 +58,36 @@ const MedicalHistoryScreen = ({ navigation }) => {
           });
         });
         
-        // Sort in memory instead of using Firestore orderBy
-        medicalHistoryData.sort((a, b) => new Date(b.date) - new Date(a.date));
+        // Fetch appointments from appointments collection
+        const appointmentsQuery = query(
+          collection(db, 'appointments'),
+          where('patientId', '==', user.uid)
+          // Removed orderBy('date', 'desc') to avoid composite index
+        );
         
-        setMedicalHistory(medicalHistoryData);
+        const appointmentsSnapshot = await getDocs(appointmentsQuery);
+        const appointmentsData = [];
+        appointmentsSnapshot.forEach((doc) => {
+          const appointment = doc.data();
+          appointmentsData.push({
+            id: doc.id,
+            type: 'appointment',
+            title: `Appointment with Dr. ${appointment.doctorName || 'Unknown Doctor'}`,
+            date: appointment.appointmentDate,
+            doctor: appointment.doctorName || 'Unknown Doctor',
+            details: `Time: ${appointment.appointmentTime || 'N/A'}\nStatus: ${appointment.status || 'N/A'}`,
+            summary: `Appointment scheduled with ${appointment.doctorName || 'Unknown Doctor'} on ${appointment.appointmentDate || 'N/A'}`,
+            critical: false
+          });
+        });
+        
+        // Combine both data sets
+        const combinedData = [...medicalHistoryData, ...appointmentsData];
+        
+        // Sort in memory instead of using Firestore orderBy
+        combinedData.sort((a, b) => new Date(b.date) - new Date(a.date));
+        
+        setMedicalHistory(combinedData);
       }
     } catch (error) {
       console.error('Error loading medical history:', error);

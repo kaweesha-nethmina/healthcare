@@ -8,10 +8,21 @@ import {
   TouchableOpacity,
   Alert,
   Switch,
-  Modal
+  Modal,
+  TextInput
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
+import {
+  collection,
+  query,
+  where,
+  getDocs,
+  updateDoc,
+  doc,
+  getDoc
+} from 'firebase/firestore';
+import { db } from '../services/firebase';
 import {
   COLORS,
   FONT_SIZES,
@@ -27,6 +38,16 @@ const PrescriptionScreen = ({ navigation }) => {
   const [filterType, setFilterType] = useState('all'); // all, active, completed, expired
   const [selectedPrescription, setSelectedPrescription] = useState(null);
   const [isDetailModalVisible, setDetailModalVisible] = useState(false);
+  const [isEditModalVisible, setIsEditModalVisible] = useState(false);
+  const [editFormData, setEditFormData] = useState({
+    medicationName: '',
+    dosage: '',
+    frequency: '',
+    instructions: '',
+    startDate: '',
+    endDate: '',
+    refills: ''
+  });
   const [reminderSettings, setReminderSettings] = useState({});
 
   useEffect(() => {
@@ -151,6 +172,72 @@ const PrescriptionScreen = ({ navigation }) => {
         }
       ]
     );
+  };
+
+  const openEditModal = (prescription) => {
+    setSelectedPrescription(prescription);
+    setEditFormData({
+      medicationName: prescription.medicationName || '',
+      dosage: prescription.dosage || '',
+      frequency: prescription.frequency || '',
+      instructions: prescription.instructions || '',
+      startDate: prescription.startDate || '',
+      endDate: prescription.endDate || '',
+      refills: prescription.refills?.toString() || '0'
+    });
+    setIsEditModalVisible(true);
+  };
+
+  const handleEditSubmit = async () => {
+    try {
+      // Check if prescription is expired
+      const endDate = new Date(editFormData.endDate);
+      const now = new Date();
+      
+      if (endDate < now) {
+        Alert.alert('Error', 'Cannot edit expired prescriptions');
+        return;
+      }
+      
+      // Update prescription in database
+      await updateDoc(doc(db, 'prescriptions', selectedPrescription.id), {
+        medicationName: editFormData.medicationName,
+        dosage: editFormData.dosage,
+        frequency: editFormData.frequency,
+        instructions: editFormData.instructions,
+        startDate: editFormData.startDate,
+        endDate: editFormData.endDate,
+        refills: parseInt(editFormData.refills),
+        refillsRemaining: parseInt(editFormData.refills)
+      });
+      
+      // Update local state
+      setPrescriptions(prev =>
+        prev.map(p => {
+          if (p.id === selectedPrescription.id) {
+            return {
+              ...p,
+              medicationName: editFormData.medicationName,
+              dosage: editFormData.dosage,
+              frequency: editFormData.frequency,
+              instructions: editFormData.instructions,
+              startDate: editFormData.startDate,
+              endDate: editFormData.endDate,
+              refills: parseInt(editFormData.refills),
+              refillsRemaining: parseInt(editFormData.refills)
+            };
+          }
+          return p;
+        })
+      );
+      
+      setIsEditModalVisible(false);
+      setDetailModalVisible(false);
+      Alert.alert('Success', 'Prescription updated successfully');
+    } catch (error) {
+      console.error('Error updating prescription:', error);
+      Alert.alert('Error', 'Failed to update prescription');
+    }
   };
 
   const getStatusColor = (status) => {
@@ -334,6 +421,13 @@ const PrescriptionScreen = ({ navigation }) => {
                 </Text>
               </View>
               
+              <View style={styles.detailSection}>
+                <Text style={styles.detailSectionTitle}>Refills</Text>
+                <Text style={styles.detailText}>
+                  {selectedPrescription.refillsRemaining} of {selectedPrescription.refills} refills remaining
+                </Text>
+              </View>
+              
               {selectedPrescription.sideEffects && (
                 <View style={styles.detailSection}>
                   <Text style={styles.detailSectionTitle}>Possible Side Effects</Text>
@@ -347,9 +441,136 @@ const PrescriptionScreen = ({ navigation }) => {
                   <Text style={styles.detailText}>{selectedPrescription.notes}</Text>
                 </View>
               )}
+              
+              {/* Show edit button only for doctors and if prescription is not expired */}
+              {userProfile?.role === 'doctor' && new Date(selectedPrescription.endDate) > new Date() && (
+                <View style={styles.editButtonContainer}>
+                  <Button
+                    title="Edit Prescription"
+                    onPress={() => {
+                      setDetailModalVisible(false);
+                      openEditModal(selectedPrescription);
+                    }}
+                    style={styles.editButton}
+                  />
+                </View>
+              )}
             </Card>
           </ScrollView>
         )}
+      </SafeAreaView>
+    </Modal>
+  );
+
+  const EditPrescriptionModal = () => (
+    <Modal
+      visible={isEditModalVisible}
+      animationType="slide"
+      presentationStyle="pageSheet"
+      onRequestClose={() => setIsEditModalVisible(false)}
+    >
+      <SafeAreaView style={styles.modalContainer}>
+        <View style={styles.modalHeader}>
+          <Text style={styles.modalTitle}>Edit Prescription</Text>
+          <TouchableOpacity
+            style={styles.closeButton}
+            onPress={() => setIsEditModalVisible(false)}
+          >
+            <Ionicons name="close" size={24} color={COLORS.TEXT_PRIMARY} />
+          </TouchableOpacity>
+        </View>
+        
+        <ScrollView style={styles.modalContent}>
+          <Card style={styles.detailCard}>
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>Medication Name</Text>
+              <TextInput
+                style={styles.textInput}
+                value={editFormData.medicationName}
+                onChangeText={(text) => setEditFormData({...editFormData, medicationName: text})}
+                placeholder="Enter medication name"
+              />
+            </View>
+            
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>Dosage</Text>
+              <TextInput
+                style={styles.textInput}
+                value={editFormData.dosage}
+                onChangeText={(text) => setEditFormData({...editFormData, dosage: text})}
+                placeholder="e.g., 10mg"
+              />
+            </View>
+            
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>Frequency</Text>
+              <TextInput
+                style={styles.textInput}
+                value={editFormData.frequency}
+                onChangeText={(text) => setEditFormData({...editFormData, frequency: text})}
+                placeholder="e.g., Twice daily"
+              />
+            </View>
+            
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>Instructions</Text>
+              <TextInput
+                style={[styles.textInput, styles.textArea]}
+                value={editFormData.instructions}
+                onChangeText={(text) => setEditFormData({...editFormData, instructions: text})}
+                placeholder="Special instructions"
+                multiline
+                numberOfLines={3}
+              />
+            </View>
+            
+            <View style={styles.inputRow}>
+              <View style={[styles.inputGroup, { flex: 1, marginRight: SPACING.SM }]}>
+                <Text style={styles.inputLabel}>Start Date</Text>
+                <TextInput
+                  style={styles.textInput}
+                  value={editFormData.startDate}
+                  onChangeText={(text) => setEditFormData({...editFormData, startDate: text})}
+                  placeholder="YYYY-MM-DD"
+                />
+              </View>
+              <View style={[styles.inputGroup, { flex: 1, marginLeft: SPACING.SM }]}>
+                <Text style={styles.inputLabel}>End Date</Text>
+                <TextInput
+                  style={styles.textInput}
+                  value={editFormData.endDate}
+                  onChangeText={(text) => setEditFormData({...editFormData, endDate: text})}
+                  placeholder="YYYY-MM-DD"
+                />
+              </View>
+            </View>
+            
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>Refills</Text>
+              <TextInput
+                style={styles.textInput}
+                value={editFormData.refills}
+                onChangeText={(text) => setEditFormData({...editFormData, refills: text})}
+                placeholder="Number of refills"
+                keyboardType="numeric"
+              />
+            </View>
+            
+            <View style={styles.buttonContainer}>
+              <Button
+                title="Cancel"
+                onPress={() => setIsEditModalVisible(false)}
+                variant="outline"
+                style={styles.cancelButton}
+              />
+              <Button
+                title="Save Changes"
+                onPress={handleEditSubmit}
+                style={styles.saveButton}
+              />
+            </View>
+          </Card>
+        </ScrollView>
       </SafeAreaView>
     </Modal>
   );
@@ -406,22 +627,20 @@ const PrescriptionScreen = ({ navigation }) => {
       </View>
 
       {/* Prescriptions List */}
-      <ScrollView style={styles.prescriptionsList} showsVerticalScrollIndicator={false}>
+      <ScrollView 
+        style={styles.content}
+        showsVerticalScrollIndicator={false}
+      >
         {filteredPrescriptions.length === 0 ? (
           <Card style={styles.emptyState}>
             <Ionicons name="medical-outline" size={64} color={COLORS.GRAY_MEDIUM} />
             <Text style={styles.emptyTitle}>No Prescriptions</Text>
             <Text style={styles.emptySubtitle}>
               {filterType === 'all' 
-                ? 'Your prescriptions will appear here when doctors prescribe medications.'
-                : `No ${filterType} prescriptions to display.`
+                ? 'You have no prescriptions yet'
+                : `No ${filterType} prescriptions found`
               }
             </Text>
-            <Button
-              title="Book Appointment"
-              onPress={() => navigation.navigate('Consultation')}
-              style={styles.emptyButton}
-            />
           </Card>
         ) : (
           filteredPrescriptions.map((prescription) => (
@@ -431,6 +650,7 @@ const PrescriptionScreen = ({ navigation }) => {
       </ScrollView>
 
       <PrescriptionDetailModal />
+      <EditPrescriptionModal />
     </SafeAreaView>
   );
 };
@@ -442,13 +662,13 @@ const styles = StyleSheet.create({
   },
   header: {
     paddingHorizontal: SPACING.MD,
-    paddingVertical: SPACING.MD,
+    paddingVertical: SPACING.LG,
     backgroundColor: COLORS.WHITE,
     borderBottomWidth: 1,
     borderBottomColor: COLORS.BORDER,
   },
   title: {
-    fontSize: FONT_SIZES.XXL,
+    fontSize: FONT_SIZES.XL,
     fontWeight: 'bold',
     color: COLORS.TEXT_PRIMARY,
     marginBottom: SPACING.XS,
@@ -482,147 +702,9 @@ const styles = StyleSheet.create({
   activeFilterButtonText: {
     color: COLORS.WHITE,
   },
-  prescriptionsList: {
+  content: {
     flex: 1,
     padding: SPACING.MD,
-  },
-  prescriptionCard: {
-    marginBottom: SPACING.MD,
-  },
-  prescriptionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: SPACING.MD,
-  },
-  medicationInfo: {
-    flexDirection: 'row',
-    flex: 1,
-  },
-  medicationIcon: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    backgroundColor: COLORS.PRIMARY,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: SPACING.MD,
-  },
-  medicationDetails: {
-    flex: 1,
-  },
-  medicationName: {
-    fontSize: FONT_SIZES.LG,
-    fontWeight: 'bold',
-    color: COLORS.TEXT_PRIMARY,
-    marginBottom: SPACING.XS / 2,
-  },
-  medicationDosage: {
-    fontSize: FONT_SIZES.MD,
-    color: COLORS.TEXT_SECONDARY,
-    marginBottom: SPACING.XS / 2,
-  },
-  prescribedBy: {
-    fontSize: FONT_SIZES.SM,
-    color: COLORS.PRIMARY,
-    fontWeight: '500',
-  },
-  prescriptionStatus: {
-    alignItems: 'flex-end',
-  },
-  statusBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: SPACING.SM,
-    paddingVertical: SPACING.XS / 2,
-    borderRadius: BORDER_RADIUS.SM,
-  },
-  statusText: {
-    fontSize: FONT_SIZES.XS,
-    color: COLORS.WHITE,
-    fontWeight: '600',
-    marginLeft: SPACING.XS / 2,
-    textTransform: 'uppercase',
-  },
-  prescriptionMeta: {
-    marginBottom: SPACING.MD,
-  },
-  metaItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: SPACING.XS / 2,
-  },
-  metaText: {
-    fontSize: FONT_SIZES.SM,
-    color: COLORS.TEXT_SECONDARY,
-    marginLeft: SPACING.XS,
-  },
-  todayDoses: {
-    marginBottom: SPACING.MD,
-  },
-  dosesTitle: {
-    fontSize: FONT_SIZES.MD,
-    fontWeight: '600',
-    color: COLORS.TEXT_PRIMARY,
-    marginBottom: SPACING.SM,
-  },
-  dosesContainer: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-  },
-  doseButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: SPACING.MD,
-    paddingVertical: SPACING.SM,
-    borderRadius: BORDER_RADIUS.MD,
-    borderWidth: 1,
-    borderColor: COLORS.PRIMARY,
-    marginRight: SPACING.SM,
-    marginBottom: SPACING.SM,
-  },
-  doseTaken: {
-    backgroundColor: COLORS.SUCCESS,
-    borderColor: COLORS.SUCCESS,
-  },
-  doseTime: {
-    fontSize: FONT_SIZES.SM,
-    color: COLORS.PRIMARY,
-    fontWeight: '600',
-  },
-  doseTimeTaken: {
-    color: COLORS.WHITE,
-    marginRight: SPACING.XS / 2,
-  },
-  prescriptionActions: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingTop: SPACING.MD,
-    borderTopWidth: 1,
-    borderTopColor: COLORS.BORDER,
-  },
-  reminderToggle: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  reminderText: {
-    fontSize: FONT_SIZES.SM,
-    color: COLORS.TEXT_PRIMARY,
-    marginRight: SPACING.SM,
-    fontWeight: '500',
-  },
-  actionButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: SPACING.MD,
-    paddingVertical: SPACING.SM,
-  },
-  actionButtonText: {
-    fontSize: FONT_SIZES.SM,
-    color: COLORS.PRIMARY,
-    marginLeft: SPACING.XS / 2,
-    fontWeight: '600',
   },
   emptyState: {
     alignItems: 'center',
@@ -640,11 +722,142 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZES.MD,
     color: COLORS.TEXT_SECONDARY,
     textAlign: 'center',
-    marginBottom: SPACING.LG,
-    paddingHorizontal: SPACING.LG,
+    paddingHorizontal: SPACING.MD,
   },
-  emptyButton: {
-    paddingHorizontal: SPACING.XL,
+  prescriptionCard: {
+    marginBottom: SPACING.MD,
+  },
+  prescriptionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: SPACING.MD,
+  },
+  medicationInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  medicationIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: COLORS.PRIMARY,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: SPACING.MD,
+  },
+  medicationDetails: {
+    flex: 1,
+  },
+  medicationName: {
+    fontSize: FONT_SIZES.MD,
+    fontWeight: 'bold',
+    color: COLORS.TEXT_PRIMARY,
+    marginBottom: SPACING.XS / 2,
+  },
+  medicationDosage: {
+    fontSize: FONT_SIZES.SM,
+    color: COLORS.TEXT_SECONDARY,
+    marginBottom: SPACING.XS / 2,
+  },
+  prescribedBy: {
+    fontSize: FONT_SIZES.SM,
+    color: COLORS.PRIMARY,
+    fontWeight: '600',
+  },
+  prescriptionStatus: {
+    alignItems: 'flex-end',
+  },
+  statusBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: SPACING.SM,
+    paddingVertical: SPACING.XS / 2,
+    borderRadius: BORDER_RADIUS.SM,
+    backgroundColor: COLORS.SUCCESS,
+  },
+  statusText: {
+    fontSize: FONT_SIZES.XS,
+    color: COLORS.WHITE,
+    fontWeight: '600',
+    marginLeft: SPACING.XS / 2,
+  },
+  prescriptionMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: SPACING.MD,
+  },
+  metaItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginRight: SPACING.MD,
+  },
+  metaText: {
+    fontSize: FONT_SIZES.SM,
+    color: COLORS.TEXT_SECONDARY,
+    marginLeft: SPACING.XS,
+  },
+  todayDoses: {
+    marginBottom: SPACING.MD,
+  },
+  dosesTitle: {
+    fontSize: FONT_SIZES.SM,
+    fontWeight: '600',
+    color: COLORS.TEXT_PRIMARY,
+    marginBottom: SPACING.XS,
+  },
+  dosesContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+  },
+  doseButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: SPACING.SM,
+    paddingVertical: SPACING.XS,
+    borderRadius: BORDER_RADIUS.SM,
+    backgroundColor: COLORS.GRAY_LIGHT,
+    marginRight: SPACING.XS,
+    marginBottom: SPACING.XS,
+  },
+  doseTaken: {
+    backgroundColor: COLORS.SUCCESS,
+  },
+  doseTime: {
+    fontSize: FONT_SIZES.SM,
+    color: COLORS.TEXT_PRIMARY,
+    marginRight: SPACING.XS / 2,
+  },
+  doseTimeTaken: {
+    color: COLORS.WHITE,
+  },
+  prescriptionActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    borderTopWidth: 1,
+    borderTopColor: COLORS.BORDER,
+    paddingTop: SPACING.MD,
+  },
+  reminderToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  reminderText: {
+    fontSize: FONT_SIZES.SM,
+    color: COLORS.TEXT_PRIMARY,
+    marginRight: SPACING.SM,
+  },
+  actionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  actionButtonText: {
+    fontSize: FONT_SIZES.SM,
+    color: COLORS.PRIMARY,
+    fontWeight: '600',
+    marginLeft: SPACING.XS,
   },
   modalContainer: {
     flex: 1,
@@ -655,7 +868,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: SPACING.MD,
-    paddingVertical: SPACING.MD,
+    paddingVertical: SPACING.LG,
     backgroundColor: COLORS.WHITE,
     borderBottomWidth: 1,
     borderBottomColor: COLORS.BORDER,
@@ -666,44 +879,92 @@ const styles = StyleSheet.create({
     color: COLORS.TEXT_PRIMARY,
   },
   closeButton: {
-    padding: SPACING.XS,
+    padding: SPACING.SM,
   },
   modalContent: {
     flex: 1,
     padding: SPACING.MD,
   },
   detailCard: {
+    padding: SPACING.LG,
     marginBottom: SPACING.MD,
   },
   detailMedicationName: {
-    fontSize: FONT_SIZES.XXL,
-    fontWeight: 'bold',
-    color: COLORS.TEXT_PRIMARY,
-    marginBottom: SPACING.XS,
-  },
-  detailDosage: {
-    fontSize: FONT_SIZES.LG,
-    color: COLORS.TEXT_SECONDARY,
-    marginBottom: SPACING.LG,
-  },
-  detailSection: {
-    marginBottom: SPACING.LG,
-  },
-  detailSectionTitle: {
-    fontSize: FONT_SIZES.MD,
+    fontSize: FONT_SIZES.XL,
     fontWeight: 'bold',
     color: COLORS.TEXT_PRIMARY,
     marginBottom: SPACING.SM,
   },
+  detailDosage: {
+    fontSize: FONT_SIZES.MD,
+    color: COLORS.PRIMARY,
+    marginBottom: SPACING.LG,
+  },
+  detailSection: {
+    marginBottom: SPACING.MD,
+  },
+  detailSectionTitle: {
+    fontSize: FONT_SIZES.MD,
+    fontWeight: '600',
+    color: COLORS.TEXT_PRIMARY,
+    marginBottom: SPACING.XS,
+  },
   detailText: {
     fontSize: FONT_SIZES.MD,
     color: COLORS.TEXT_SECONDARY,
-    lineHeight: 22,
+    lineHeight: 20,
   },
   detailSubtext: {
     fontSize: FONT_SIZES.SM,
-    color: COLORS.TEXT_SECONDARY,
-    marginTop: SPACING.XS / 2,
+    color: COLORS.GRAY_MEDIUM,
+    marginTop: SPACING.XS,
+  },
+  editButtonContainer: {
+    marginTop: SPACING.LG,
+    alignItems: 'center',
+  },
+  editButton: {
+    width: '100%',
+  },
+  inputGroup: {
+    marginBottom: SPACING.MD,
+  },
+  inputLabel: {
+    fontSize: FONT_SIZES.SM,
+    color: COLORS.TEXT_PRIMARY,
+    fontWeight: '600',
+    marginBottom: SPACING.XS,
+  },
+  textInput: {
+    borderWidth: 1,
+    borderColor: COLORS.BORDER,
+    borderRadius: BORDER_RADIUS.MD,
+    paddingHorizontal: SPACING.MD,
+    paddingVertical: SPACING.SM,
+    fontSize: FONT_SIZES.MD,
+    color: COLORS.TEXT_PRIMARY,
+    backgroundColor: COLORS.WHITE,
+  },
+  textArea: {
+    height: 80,
+    textAlignVertical: 'top',
+  },
+  inputRow: {
+    flexDirection: 'row',
+    marginBottom: SPACING.MD,
+  },
+  buttonContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: SPACING.LG,
+  },
+  cancelButton: {
+    flex: 1,
+    marginRight: SPACING.SM,
+  },
+  saveButton: {
+    flex: 1,
+    marginLeft: SPACING.SM,
   },
 });
 
