@@ -93,7 +93,8 @@ export {
   query,
   where,
   orderBy,
-  getDocs
+  getDocs,
+  serverTimestamp
 } from 'firebase/firestore';
 
 // Note: Firebase Storage functions removed - using Supabase Storage instead

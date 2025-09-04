@@ -20,7 +20,8 @@ import {
 import Card from '../components/Card';
 import Button from '../components/Button';
 import LocationService from '../services/locationService';
-import { db, collection, addDoc, serverTimestamp } from '../services/firebase';
+import { db, collection, addDoc, doc, updateDoc, query, where, getDocs } from '../services/firebase';
+import { serverTimestamp } from 'firebase/firestore';
 import EmergencyMapScreen from './EmergencyMapScreen';
 
 const SOSScreen = ({ navigation }) => {
@@ -125,6 +126,9 @@ const SOSScreen = ({ navigation }) => {
       setEmergencyId(docRef.id);
       setIsEmergencyActive(true);
       
+      // Notify emergency operators
+      await notifyEmergencyOperators(emergencyData, docRef.id);
+      
       // Start location tracking
       startLocationTracking();
       
@@ -139,6 +143,62 @@ const SOSScreen = ({ navigation }) => {
       console.error('Error activating emergency:', error);
       Vibration.cancel();
       Alert.alert('Error', 'Failed to activate emergency. Please try again.');
+    }
+  };
+
+  const notifyEmergencyOperators = async (emergencyData, emergencyId) => {
+    try {
+      // Query all users with role 'emergency_operator'
+      const operatorsQuery = query(
+        collection(db, 'users'),
+        where('role', '==', 'emergency_operator')
+      );
+      
+      const operatorsSnapshot = await getDocs(operatorsQuery);
+      
+      // Create notifications for each emergency operator
+      const notificationPromises = [];
+      
+      operatorsSnapshot.forEach((doc) => {
+        const operator = doc.data();
+        if (operator.uid) {
+          const notificationData = {
+            userId: operator.uid,
+            title: 'Emergency Alert',
+            message: `SOS from ${emergencyData.userName || 'Unknown User'} at location (${emergencyData.latitude.toFixed(6)}, ${emergencyData.longitude.toFixed(6)})`,
+            type: 'emergency',
+            category: 'emergency',
+            priority: 'urgent',
+            data: {
+              emergencyId: emergencyId,
+              userId: emergencyData.userId,
+              userName: emergencyData.userName,
+              userPhone: emergencyData.userPhone,
+              latitude: emergencyData.latitude,
+              longitude: emergencyData.longitude,
+              timestamp: emergencyData.timestamp
+            },
+            actionUrl: `/emergency/${emergencyId}`
+          };
+          
+          // Create notification in Firebase
+          const notificationPromise = addDoc(collection(db, 'notifications'), {
+            ...notificationData,
+            timestamp: serverTimestamp(),
+            read: false
+          });
+          
+          notificationPromises.push(notificationPromise);
+        }
+      });
+      
+      // Wait for all notifications to be created
+      await Promise.all(notificationPromises);
+      
+      console.log(`Notified ${operatorsSnapshot.size} emergency operators`);
+    } catch (error) {
+      console.error('Error notifying emergency operators:', error);
+      // Don't throw error as this shouldn't prevent the emergency from being activated
     }
   };
 
