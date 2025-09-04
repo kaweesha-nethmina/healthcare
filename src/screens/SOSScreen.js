@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -6,9 +6,8 @@ import {
   SafeAreaView,
   TouchableOpacity,
   Alert,
-  Animated,
-  Vibration,
-  Dimensions
+  AppState,
+  Vibration
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
@@ -20,314 +19,343 @@ import {
 } from '../constants';
 import Card from '../components/Card';
 import Button from '../components/Button';
-
-const { width } = Dimensions.get('window');
+import LocationService from '../services/locationService';
+import { db, collection, addDoc, serverTimestamp } from '../services/firebase';
+import EmergencyMapScreen from './EmergencyMapScreen';
 
 const SOSScreen = ({ navigation }) => {
-  const { userProfile } = useAuth();
+  const { user, userProfile } = useAuth();
   const [isEmergencyActive, setIsEmergencyActive] = useState(false);
-  const [countdown, setCountdown] = useState(0);
-  const [pulseAnimation] = useState(new Animated.Value(1));
-  const [emergencyType, setEmergencyType] = useState('');
-  
-  const countdownTimer = React.useRef(null);
+  const [location, setLocation] = useState(null);
+  const [locationTracking, setLocationTracking] = useState(false);
+  const [emergencyId, setEmergencyId] = useState(null);
+  const [countdown, setCountdown] = useState(5);
+  const [showConfirmation, setShowConfirmation] = useState(false);
+  const locationSubscriptionRef = useRef(null);
+  const countdownRef = useRef(null);
 
+  // Clean up on unmount
   useEffect(() => {
-    // Start pulse animation
-    const pulseAnimationLoop = () => {
-      Animated.sequence([
-        Animated.timing(pulseAnimation, {
-          toValue: 1.2,
-          duration: 1000,
-          useNativeDriver: true,
-        }),
-        Animated.timing(pulseAnimation, {
-          toValue: 1,
-          duration: 1000,
-          useNativeDriver: true,
-        }),
-      ]).start(() => pulseAnimationLoop());
-    };
-    
-    if (isEmergencyActive) {
-      pulseAnimationLoop();
-    }
-
     return () => {
-      if (countdownTimer.current) {
-        clearInterval(countdownTimer.current);
+      if (locationSubscriptionRef.current) {
+        locationSubscriptionRef.current.remove();
       }
+      if (countdownRef.current) {
+        clearInterval(countdownRef.current);
+      }
+    };
+  }, []);
+
+  // Handle app state changes
+  useEffect(() => {
+    const handleAppStateChange = (nextAppState) => {
+      if (nextAppState === 'background' && isEmergencyActive) {
+        // App is going to background while emergency is active
+        console.log('App going to background during emergency');
+      } else if (nextAppState === 'active' && isEmergencyActive) {
+        // App is coming to foreground while emergency is active
+        console.log('App coming to foreground during emergency');
+      }
+    };
+
+    const subscription = AppState.addEventListener('change', handleAppStateChange);
+    return () => {
+      subscription?.remove();
     };
   }, [isEmergencyActive]);
 
-  const startEmergencyCountdown = (type) => {
-    setEmergencyType(type);
-    setCountdown(10); // 10 second countdown
-    setIsEmergencyActive(true);
+  const startEmergency = async () => {
+    try {
+      // Show confirmation dialog
+      setShowConfirmation(true);
+    } catch (error) {
+      console.error('Error initiating emergency:', error);
+      Alert.alert('Error', 'Failed to initiate emergency. Please try again.');
+    }
+  };
+
+  const confirmEmergency = async () => {
+    setShowConfirmation(false);
     
-    // Start vibration pattern
-    Vibration.vibrate([0, 1000, 1000, 1000], true);
+    // Start countdown
+    setCountdown(5);
+    let count = 5;
     
-    countdownTimer.current = setInterval(() => {
-      setCountdown(prev => {
-        if (prev <= 1) {
-          // Emergency activated!
-          activateEmergency(type);
-          return 0;
-        }
-        return prev - 1;
-      });
+    countdownRef.current = setInterval(() => {
+      count -= 1;
+      setCountdown(count);
+      
+      if (count <= 0) {
+        clearInterval(countdownRef.current);
+        activateEmergency();
+      }
     }, 1000);
   };
 
-  const activateEmergency = (type) => {
-    Vibration.cancel();
-    setIsEmergencyActive(false);
-    
-    if (countdownTimer.current) {
-      clearInterval(countdownTimer.current);
+  const cancelEmergency = () => {
+    setShowConfirmation(false);
+    if (countdownRef.current) {
+      clearInterval(countdownRef.current);
     }
+  };
 
-    Alert.alert(
-      'Emergency Activated',
-      `${type} emergency has been activated. Emergency services and your emergency contacts have been notified.`,
-      [
-        {
-          text: 'View Location',
-          onPress: () => navigation.navigate('EmergencyMap', { emergencyType: type })
-        },
-        {
-          text: 'OK',
-          onPress: () => {
-            // In a real app, this would:
-            // 1. Send location to emergency services
-            // 2. Contact emergency contacts
-            // 3. Start live location tracking
-            // 4. Connect to nearest hospital
+  const activateEmergency = async () => {
+    try {
+      // Vibrate device
+      Vibration.vibrate([500, 500, 500], true);
+      
+      // Get current location
+      const currentLocation = await LocationService.getCurrentLocation();
+      setLocation(currentLocation);
+      
+      // Save emergency to Firebase
+      const emergencyData = {
+        userId: user.uid,
+        userName: userProfile?.name || 'Unknown User',
+        userPhone: userProfile?.phone || 'Unknown',
+        latitude: currentLocation.latitude,
+        longitude: currentLocation.longitude,
+        accuracy: currentLocation.accuracy,
+        timestamp: serverTimestamp(),
+        status: 'active',
+        notes: ''
+      };
+
+      const docRef = await addDoc(collection(db, 'emergencies'), emergencyData);
+      setEmergencyId(docRef.id);
+      setIsEmergencyActive(true);
+      
+      // Start location tracking
+      startLocationTracking();
+      
+      // Show alert
+      Alert.alert(
+        'Emergency Activated',
+        'Help is on the way. Emergency services have been notified.',
+        [{ text: 'OK' }]
+      );
+      
+    } catch (error) {
+      console.error('Error activating emergency:', error);
+      Vibration.cancel();
+      Alert.alert('Error', 'Failed to activate emergency. Please try again.');
+    }
+  };
+
+  const startLocationTracking = async () => {
+    try {
+      setLocationTracking(true);
+      
+      locationSubscriptionRef.current = await LocationService.startLocationTracking(
+        async (newLocation) => {
+          setLocation(newLocation);
+          
+          // Update emergency location in Firebase
+          if (emergencyId) {
+            try {
+              await LocationService.updateEmergencyLocation(emergencyId, newLocation);
+            } catch (error) {
+              console.error('Error updating emergency location:', error);
+            }
           }
         }
-      ]
-    );
-  };
-
-  const cancelEmergency = () => {
-    Vibration.cancel();
-    setIsEmergencyActive(false);
-    setCountdown(0);
-    
-    if (countdownTimer.current) {
-      clearInterval(countdownTimer.current);
+      );
+    } catch (error) {
+      console.error('Error starting location tracking:', error);
+      Alert.alert('Location Error', 'Failed to start location tracking.');
     }
   };
 
-  const emergencyTypes = [
-    {
-      id: 'medical',
-      title: 'Medical Emergency',
-      subtitle: 'Heart attack, stroke, severe injury',
-      icon: 'medical',
-      color: COLORS.EMERGENCY,
-      description: 'Immediate medical assistance needed'
-    },
-    {
-      id: 'accident',
-      title: 'Accident Emergency',
-      subtitle: 'Car accident, fall, collision',
-      icon: 'car-sport',
-      color: COLORS.WARNING,
-      description: 'Traffic or physical accident'
-    },
-    {
-      id: 'fire',
-      title: 'Fire Emergency',
-      subtitle: 'Fire, smoke, burns',
-      icon: 'flame',
-      color: COLORS.ERROR,
-      description: 'Fire or burn related emergency'
-    },
-    {
-      id: 'crime',
-      title: 'Security Emergency',
-      subtitle: 'Crime, violence, threat',
-      icon: 'shield-outline',
-      color: COLORS.INFO,
-      description: 'Personal safety or security threat'
-    },
-    {
-      id: 'general',
-      title: 'General Emergency',
-      subtitle: 'Other urgent situations',
-      icon: 'alert-circle',
-      color: COLORS.PRIMARY,
-      description: 'Other emergency situations'
+  const endEmergency = async () => {
+    try {
+      // Stop vibration
+      Vibration.cancel();
+      
+      // Stop location tracking
+      if (locationSubscriptionRef.current) {
+        locationSubscriptionRef.current.remove();
+        locationSubscriptionRef.current = null;
+      }
+      
+      // Update emergency status in Firebase
+      if (emergencyId) {
+        try {
+          const emergencyRef = doc(db, 'emergencies', emergencyId);
+          await updateDoc(emergencyRef, {
+            status: 'resolved',
+            resolvedAt: serverTimestamp()
+          });
+        } catch (error) {
+          console.error('Error updating emergency status:', error);
+        }
+      }
+      
+      setIsEmergencyActive(false);
+      setLocationTracking(false);
+      setEmergencyId(null);
+      
+      Alert.alert(
+        'Emergency Ended',
+        'Emergency status has been deactivated.',
+        [{ text: 'OK' }]
+      );
+    } catch (error) {
+      console.error('Error ending emergency:', error);
+      Alert.alert('Error', 'Failed to end emergency. Please try again.');
     }
-  ];
+  };
 
-  const EmergencyTypeCard = ({ emergency }) => (
-    <Card style={styles.emergencyCard}>
-      <TouchableOpacity
-        style={styles.emergencyButton}
-        onPress={() => {
-          Alert.alert(
-            'Confirm Emergency',
-            `Are you sure you want to activate ${emergency.title}? This will contact emergency services immediately.`,
-            [
-              { text: 'Cancel', style: 'cancel' },
-              {
-                text: 'Confirm Emergency',
-                style: 'destructive',
-                onPress: () => startEmergencyCountdown(emergency.title)
-              }
-            ]
-          );
-        }}
-      >
-        <View style={[styles.emergencyIcon, { backgroundColor: emergency.color }]}>
-          <Ionicons name={emergency.icon} size={32} color={COLORS.WHITE} />
-        </View>
-        <View style={styles.emergencyInfo}>
-          <Text style={styles.emergencyTitle}>{emergency.title}</Text>
-          <Text style={styles.emergencySubtitle}>{emergency.subtitle}</Text>
-          <Text style={styles.emergencyDescription}>{emergency.description}</Text>
-        </View>
-        <Ionicons name="chevron-forward" size={24} color={COLORS.GRAY_MEDIUM} />
-      </TouchableOpacity>
-    </Card>
-  );
-
-  if (isEmergencyActive) {
-    return (
-      <SafeAreaView style={styles.emergencyContainer}>
-        <View style={styles.emergencyContent}>
-          <Text style={styles.emergencyActiveTitle}>Emergency Activating</Text>
-          <Text style={styles.emergencyTypeText}>{emergencyType}</Text>
-          
-          <Animated.View 
-            style={[
-              styles.countdownContainer,
-              { transform: [{ scale: pulseAnimation }] }
-            ]}
-          >
-            <Text style={styles.countdownText}>{countdown}</Text>
-          </Animated.View>
-          
-          <Text style={styles.countdownLabel}>
-            Emergency services will be contacted in {countdown} seconds
-          </Text>
-          
-          <View style={styles.emergencyActions}>
-            <Button
-              title="Cancel Emergency"
-              onPress={cancelEmergency}
-              style={styles.cancelButton}
-              variant="outline"
-            />
-          </View>
-          
-          <Text style={styles.emergencyNote}>
-            Your location and emergency contacts will be notified automatically
-          </Text>
-        </View>
-      </SafeAreaView>
-    );
-  }
+  const viewMap = () => {
+    navigation.navigate('EmergencyMap', { 
+      location,
+      emergencyId,
+      isEmergencyActive
+    });
+  };
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* Header */}
-      <View style={styles.header}>
-        <Text style={styles.title}>Emergency SOS</Text>
-        <Text style={styles.subtitle}>
-          Quick access to emergency services and contacts
-        </Text>
-      </View>
-
-      {/* Quick SOS Button */}
-      <Card style={styles.quickSOSCard}>
-        <TouchableOpacity
-          style={styles.quickSOSButton}
-          onPress={() => startEmergencyCountdown('Quick Emergency')}
-        >
-          <Ionicons name="warning" size={48} color={COLORS.WHITE} />
-          <Text style={styles.quickSOSText}>QUICK SOS</Text>
-          <Text style={styles.quickSOSSubtext}>
-            Hold to activate emergency services
+      <View style={styles.content}>
+        {/* Header */}
+        <View style={styles.header}>
+          <Text style={styles.title}>Emergency SOS</Text>
+          <Text style={styles.subtitle}>
+            Immediate help when you need it most
           </Text>
-        </TouchableOpacity>
-      </Card>
+        </View>
 
-      {/* Emergency Types */}
-      <View style={styles.emergencyTypesContainer}>
-        <Text style={styles.sectionTitle}>Select Emergency Type</Text>
-        {emergencyTypes.map((emergency) => (
-          <EmergencyTypeCard key={emergency.id} emergency={emergency} />
-        ))}
+        {/* Emergency Status */}
+        {isEmergencyActive && (
+          <Card style={styles.statusCard}>
+            <View style={styles.statusHeader}>
+              <Ionicons name="warning" size={24} color={COLORS.EMERGENCY} />
+              <Text style={styles.statusTitle}>Emergency Active</Text>
+            </View>
+            <Text style={styles.statusText}>
+              Emergency services have been notified. Help is on the way.
+            </Text>
+            {location && (
+              <Text style={styles.locationText}>
+                Location: {location.latitude.toFixed(6)}, {location.longitude.toFixed(6)}
+              </Text>
+            )}
+          </Card>
+        )}
+
+        {/* Main SOS Button */}
+        <View style={styles.sosContainer}>
+          <TouchableOpacity
+            style={[
+              styles.sosButton,
+              isEmergencyActive && styles.sosButtonActive
+            ]}
+            onPress={isEmergencyActive ? endEmergency : startEmergency}
+            disabled={showConfirmation}
+          >
+            <Ionicons 
+              name={isEmergencyActive ? "stop-circle" : "radio-button-on"} 
+              size={80} 
+              color={isEmergencyActive ? COLORS.WHITE : COLORS.EMERGENCY} 
+            />
+          </TouchableOpacity>
+          <Text style={styles.sosLabel}>
+            {isEmergencyActive ? 'End Emergency' : 'Activate SOS'}
+          </Text>
+        </View>
+
+        {/* Emergency Actions */}
+        {isEmergencyActive && (
+          <View style={styles.actionsContainer}>
+            <Button
+              title="View on Map"
+              onPress={viewMap}
+              style={styles.actionButton}
+              textStyle={styles.actionButtonText}
+            />
+            <Button
+              title="Call Emergency"
+              onPress={() => {}}
+              style={[styles.actionButton, styles.callButton]}
+              textStyle={styles.actionButtonText}
+            />
+          </View>
+        )}
+
+        {/* Quick Information */}
+        <Card style={styles.infoCard}>
+          <Text style={styles.infoTitle}>Emergency Information</Text>
+          <View style={styles.infoItem}>
+            <Ionicons name="person" size={20} color={COLORS.PRIMARY} />
+            <Text style={styles.infoText}>
+              Name: {userProfile?.name || 'Not set'}
+            </Text>
+          </View>
+          <View style={styles.infoItem}>
+            <Ionicons name="call" size={20} color={COLORS.PRIMARY} />
+            <Text style={styles.infoText}>
+              Phone: {userProfile?.phone || 'Not set'}
+            </Text>
+          </View>
+          <View style={styles.infoItem}>
+            <Ionicons name="location" size={20} color={COLORS.PRIMARY} />
+            <Text style={styles.infoText}>
+              Blood Type: {userProfile?.bloodType || 'Not set'}
+            </Text>
+          </View>
+          <View style={styles.infoItem}>
+            <Ionicons name="alert-circle" size={20} color={COLORS.PRIMARY} />
+            <Text style={styles.infoText}>
+              Medical Conditions: {userProfile?.medicalConditions?.join(', ') || 'None'}
+            </Text>
+          </View>
+        </Card>
+
+        {/* Emergency Contacts */}
+        <Card style={styles.contactsCard}>
+          <Text style={styles.contactsTitle}>Emergency Contacts</Text>
+          {userProfile?.emergencyContacts?.length > 0 ? (
+            userProfile.emergencyContacts.map((contact, index) => (
+              <View key={index} style={styles.contactItem}>
+                <View style={styles.contactInfo}>
+                  <Text style={styles.contactName}>{contact.name}</Text>
+                  <Text style={styles.contactPhone}>{contact.phone}</Text>
+                </View>
+                <TouchableOpacity style={styles.contactCallButton}>
+                  <Ionicons name="call" size={20} color={COLORS.WHITE} />
+                </TouchableOpacity>
+              </View>
+            ))
+          ) : (
+            <Text style={styles.noContactsText}>No emergency contacts added</Text>
+          )}
+        </Card>
       </View>
 
-      {/* Emergency Contacts */}
-      <Card style={styles.emergencyContactsCard}>
-        <View style={styles.contactsHeader}>
-          <Ionicons name="people" size={24} color={COLORS.PRIMARY} />
-          <Text style={styles.contactsTitle}>Emergency Contacts</Text>
+      {/* Confirmation Modal */}
+      {showConfirmation && (
+        <View style={styles.overlay}>
+          <Card style={styles.confirmationCard}>
+            <Ionicons name="warning" size={48} color={COLORS.EMERGENCY} />
+            <Text style={styles.confirmationTitle}>Activate Emergency?</Text>
+            <Text style={styles.confirmationText}>
+              This will notify emergency services and your emergency contacts.
+            </Text>
+            <Text style={styles.countdownText}>{countdown}</Text>
+            <View style={styles.confirmationButtons}>
+              <Button
+                title="Cancel"
+                onPress={cancelEmergency}
+                style={styles.cancelButton}
+              />
+              <Button
+                title="Confirm"
+                onPress={confirmEmergency}
+                style={styles.confirmButton}
+              />
+            </View>
+          </Card>
         </View>
-        
-        <TouchableOpacity
-          style={styles.contactButton}
-          onPress={() => Alert.alert('Calling Emergency Services', 'This would dial your local emergency number (911, 112, etc.)')}
-        >
-          <Ionicons name="call" size={20} color={COLORS.EMERGENCY} />
-          <Text style={styles.contactText}>Emergency Services</Text>
-          <Text style={styles.contactNumber}>911</Text>
-        </TouchableOpacity>
-        
-        <TouchableOpacity
-          style={styles.contactButton}
-          onPress={() => Alert.alert('Feature Coming Soon', 'Personal emergency contacts management will be available soon.')}
-        >
-          <Ionicons name="person" size={20} color={COLORS.SUCCESS} />
-          <Text style={styles.contactText}>Emergency Contact 1</Text>
-          <Text style={styles.contactNumber}>+1 (555) 123-4567</Text>
-        </TouchableOpacity>
-        
-        <TouchableOpacity
-          style={styles.contactButton}
-          onPress={() => Alert.alert('Feature Coming Soon', 'Personal emergency contacts management will be available soon.')}
-        >
-          <Ionicons name="person" size={20} color={COLORS.SUCCESS} />
-          <Text style={styles.contactText}>Emergency Contact 2</Text>
-          <Text style={styles.contactNumber}>+1 (555) 987-6543</Text>
-        </TouchableOpacity>
-      </Card>
-
-      {/* Medical Information */}
-      <Card style={styles.medicalInfoCard}>
-        <View style={styles.medicalInfoHeader}>
-          <Ionicons name="medical" size={24} color={COLORS.INFO} />
-          <Text style={styles.medicalInfoTitle}>Medical Information</Text>
-          <TouchableOpacity onPress={() => navigation.navigate('Profile')}>
-            <Ionicons name="create-outline" size={20} color={COLORS.GRAY_MEDIUM} />
-          </TouchableOpacity>
-        </View>
-        
-        <View style={styles.medicalInfoGrid}>
-          <View style={styles.medicalInfoItem}>
-            <Text style={styles.medicalInfoLabel}>Blood Type</Text>
-            <Text style={styles.medicalInfoValue}>{userProfile?.bloodType || 'Not Set'}</Text>
-          </View>
-          <View style={styles.medicalInfoItem}>
-            <Text style={styles.medicalInfoLabel}>Age</Text>
-            <Text style={styles.medicalInfoValue}>{userProfile?.age || 'Not Set'}</Text>
-          </View>
-          <View style={styles.medicalInfoItem}>
-            <Text style={styles.medicalInfoLabel}>Allergies</Text>
-            <Text style={styles.medicalInfoValue}>None Known</Text>
-          </View>
-          <View style={styles.medicalInfoItem}>
-            <Text style={styles.medicalInfoLabel}>Medications</Text>
-            <Text style={styles.medicalInfoValue}>None</Text>
-          </View>
-        </View>
-      </Card>
+      )}
     </SafeAreaView>
   );
 };
@@ -337,12 +365,13 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: COLORS.BACKGROUND,
   },
+  content: {
+    flex: 1,
+    padding: SPACING.MD,
+  },
   header: {
-    paddingHorizontal: SPACING.MD,
-    paddingVertical: SPACING.MD,
-    backgroundColor: COLORS.WHITE,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.BORDER,
+    alignItems: 'center',
+    marginBottom: SPACING.LG,
   },
   title: {
     fontSize: FONT_SIZES.XXL,
@@ -353,199 +382,186 @@ const styles = StyleSheet.create({
   subtitle: {
     fontSize: FONT_SIZES.MD,
     color: COLORS.TEXT_SECONDARY,
+    textAlign: 'center',
   },
-  quickSOSCard: {
-    margin: SPACING.MD,
-    backgroundColor: COLORS.EMERGENCY,
-    borderWidth: 0,
+  statusCard: {
+    backgroundColor: COLORS.WHITE,
+    borderRadius: BORDER_RADIUS.MD,
+    padding: SPACING.MD,
+    marginBottom: SPACING.LG,
   },
-  quickSOSButton: {
+  statusHeader: {
+    flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: SPACING.XL,
-  },
-  quickSOSText: {
-    fontSize: FONT_SIZES.XXL,
-    fontWeight: 'bold',
-    color: COLORS.WHITE,
-    marginTop: SPACING.MD,
     marginBottom: SPACING.SM,
   },
-  quickSOSSubtext: {
+  statusTitle: {
+    fontSize: FONT_SIZES.LG,
+    fontWeight: 'bold',
+    color: COLORS.TEXT_PRIMARY,
+    marginLeft: SPACING.SM,
+  },
+  statusText: {
     fontSize: FONT_SIZES.SM,
+    color: COLORS.TEXT_SECONDARY,
+    marginBottom: SPACING.SM,
+  },
+  locationText: {
+    fontSize: FONT_SIZES.SM,
+    color: COLORS.GRAY_MEDIUM,
+  },
+  sosContainer: {
+    alignItems: 'center',
+    marginBottom: SPACING.LG,
+  },
+  sosButton: {
+    width: 150,
+    height: 150,
+    borderRadius: 75,
+    backgroundColor: COLORS.EMERGENCY,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  sosButtonActive: {
+    backgroundColor: COLORS.ERROR,
+  },
+  sosLabel: {
+    fontSize: FONT_SIZES.MD,
+    color: COLORS.TEXT_PRIMARY,
+    marginTop: SPACING.SM,
+  },
+  actionsContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: SPACING.LG,
+  },
+  actionButton: {
+    width: '48%',
+    backgroundColor: COLORS.PRIMARY,
+    borderRadius: BORDER_RADIUS.MD,
+    paddingVertical: SPACING.SM,
+  },
+  actionButtonText: {
+    fontSize: FONT_SIZES.MD,
     color: COLORS.WHITE,
-    opacity: 0.9,
+    textAlign: 'center',
   },
-  emergencyTypesContainer: {
-    paddingHorizontal: SPACING.MD,
+  callButton: {
+    backgroundColor: COLORS.WARNING,
   },
-  sectionTitle: {
+  infoCard: {
+    backgroundColor: COLORS.WHITE,
+    borderRadius: BORDER_RADIUS.MD,
+    padding: SPACING.MD,
+    marginBottom: SPACING.LG,
+  },
+  infoTitle: {
     fontSize: FONT_SIZES.LG,
     fontWeight: 'bold',
     color: COLORS.TEXT_PRIMARY,
     marginBottom: SPACING.MD,
   },
-  emergencyCard: {
+  infoItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
     marginBottom: SPACING.SM,
   },
-  emergencyButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: SPACING.SM,
-  },
-  emergencyIcon: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: SPACING.MD,
-  },
-  emergencyInfo: {
-    flex: 1,
-  },
-  emergencyTitle: {
-    fontSize: FONT_SIZES.MD,
-    fontWeight: 'bold',
-    color: COLORS.TEXT_PRIMARY,
-    marginBottom: SPACING.XS / 2,
-  },
-  emergencySubtitle: {
+  infoText: {
     fontSize: FONT_SIZES.SM,
     color: COLORS.TEXT_SECONDARY,
-    marginBottom: SPACING.XS / 2,
+    marginLeft: SPACING.SM,
   },
-  emergencyDescription: {
-    fontSize: FONT_SIZES.XS,
-    color: COLORS.GRAY_MEDIUM,
-  },
-  emergencyContactsCard: {
-    margin: SPACING.MD,
-    marginTop: SPACING.SM,
-  },
-  contactsHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: SPACING.MD,
+  contactsCard: {
+    backgroundColor: COLORS.WHITE,
+    borderRadius: BORDER_RADIUS.MD,
+    padding: SPACING.MD,
   },
   contactsTitle: {
     fontSize: FONT_SIZES.LG,
     fontWeight: 'bold',
     color: COLORS.TEXT_PRIMARY,
-    marginLeft: SPACING.SM,
-  },
-  contactButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: SPACING.SM,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.GRAY_LIGHT,
-  },
-  contactText: {
-    fontSize: FONT_SIZES.MD,
-    color: COLORS.TEXT_PRIMARY,
-    marginLeft: SPACING.MD,
-    flex: 1,
-  },
-  contactNumber: {
-    fontSize: FONT_SIZES.SM,
-    color: COLORS.PRIMARY,
-    fontWeight: '600',
-  },
-  medicalInfoCard: {
-    margin: SPACING.MD,
-    marginTop: SPACING.SM,
-    marginBottom: SPACING.XL,
-  },
-  medicalInfoHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
     marginBottom: SPACING.MD,
   },
-  medicalInfoTitle: {
-    fontSize: FONT_SIZES.LG,
-    fontWeight: 'bold',
-    color: COLORS.TEXT_PRIMARY,
-    flex: 1,
-    marginLeft: SPACING.SM,
-  },
-  medicalInfoGrid: {
+  contactItem: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: SPACING.SM,
   },
-  medicalInfoItem: {
-    width: '50%',
-    paddingVertical: SPACING.SM,
-    paddingRight: SPACING.SM,
+  contactInfo: {
+    flex: 1,
   },
-  medicalInfoLabel: {
-    fontSize: FONT_SIZES.XS,
-    color: COLORS.TEXT_SECONDARY,
-    fontWeight: '500',
-    marginBottom: SPACING.XS / 2,
-  },
-  medicalInfoValue: {
+  contactName: {
     fontSize: FONT_SIZES.SM,
     color: COLORS.TEXT_PRIMARY,
-    fontWeight: '600',
   },
-  emergencyContainer: {
-    flex: 1,
-    backgroundColor: COLORS.EMERGENCY,
+  contactPhone: {
+    fontSize: FONT_SIZES.SM,
+    color: COLORS.GRAY_MEDIUM,
+  },
+  contactCallButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: COLORS.PRIMARY,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  emergencyContent: {
+  noContactsText: {
+    fontSize: FONT_SIZES.SM,
+    color: COLORS.GRAY_MEDIUM,
+    textAlign: 'center',
+  },
+  overlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    justifyContent: 'center',
     alignItems: 'center',
-    paddingHorizontal: SPACING.LG,
   },
-  emergencyActiveTitle: {
-    fontSize: FONT_SIZES.XXL,
-    fontWeight: 'bold',
-    color: COLORS.WHITE,
-    marginBottom: SPACING.SM,
-    textAlign: 'center',
-  },
-  emergencyTypeText: {
-    fontSize: FONT_SIZES.LG,
-    color: COLORS.WHITE,
-    marginBottom: SPACING.XXL,
-    textAlign: 'center',
-    opacity: 0.9,
-  },
-  countdownContainer: {
-    width: 200,
-    height: 200,
-    borderRadius: 100,
+  confirmationCard: {
     backgroundColor: COLORS.WHITE,
-    justifyContent: 'center',
+    borderRadius: BORDER_RADIUS.MD,
+    padding: SPACING.MD,
     alignItems: 'center',
-    marginBottom: SPACING.LG,
+  },
+  confirmationTitle: {
+    fontSize: FONT_SIZES.XL,
+    fontWeight: 'bold',
+    color: COLORS.TEXT_PRIMARY,
+    marginBottom: SPACING.SM,
+  },
+  confirmationText: {
+    fontSize: FONT_SIZES.SM,
+    color: COLORS.TEXT_SECONDARY,
+    marginBottom: SPACING.SM,
   },
   countdownText: {
-    fontSize: 80,
+    fontSize: FONT_SIZES.XL,
     fontWeight: 'bold',
     color: COLORS.EMERGENCY,
-  },
-  countdownLabel: {
-    fontSize: FONT_SIZES.MD,
-    color: COLORS.WHITE,
-    textAlign: 'center',
-    marginBottom: SPACING.XXL,
-  },
-  emergencyActions: {
-    width: '100%',
     marginBottom: SPACING.LG,
   },
-  cancelButton: {
-    backgroundColor: 'transparent',
-    borderColor: COLORS.WHITE,
+  confirmationButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    width: '100%',
   },
-  emergencyNote: {
-    fontSize: FONT_SIZES.SM,
-    color: COLORS.WHITE,
-    textAlign: 'center',
-    opacity: 0.8,
+  cancelButton: {
+    backgroundColor: COLORS.ERROR,
+    borderRadius: BORDER_RADIUS.MD,
+    paddingVertical: SPACING.SM,
+    flex: 1,
+    marginRight: SPACING.SM,
+  },
+  confirmButton: {
+    backgroundColor: COLORS.SUCCESS,
+    borderRadius: BORDER_RADIUS.MD,
+    paddingVertical: SPACING.SM,
+    flex: 1,
   },
 });
 

@@ -9,6 +9,7 @@ import {
 import { doc, setDoc, getDoc } from 'firebase/firestore';
 import { auth, db } from '../services/firebase';
 import { USER_ROLES } from '../constants';
+import PushNotificationService from '../services/pushNotificationService';
 
 // Auth Context
 const AuthContext = createContext();
@@ -229,6 +230,13 @@ export const AuthProvider = ({ children }) => {
           type: AUTH_ACTIONS.SET_USER,
           payload: { user, profile: userProfile }
         });
+        
+        // Initialize push notifications
+        const pushToken = await PushNotificationService.requestPermissions();
+        if (pushToken) {
+          await PushNotificationService.savePushTokenToProfile(pushToken);
+        }
+        
         return { success: true, user, profile: userProfile };
       } else {
         throw new Error('User profile not found');

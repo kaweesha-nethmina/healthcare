@@ -9,39 +9,75 @@ import {
   TouchableOpacity,
   KeyboardAvoidingView,
   Platform,
-  Alert
+  Alert,
+  Image
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
+import {
+  collection,
+  addDoc,
+  query,
+  where,
+  // Removed orderBy import since we'll sort client-side
+  onSnapshot,
+  serverTimestamp,
+  getDocs,
+  doc,
+  setDoc,
+  getDoc
+} from 'firebase/firestore';
+import { db } from '../services/firebase';
 import {
   COLORS,
   FONT_SIZES,
   SPACING,
   BORDER_RADIUS
 } from '../constants';
+import NotificationService from '../services/notificationService';
 
 const ChatScreen = ({ navigation, route }) => {
-  const { appointmentId, doctorId, doctorName } = route.params || {};
-  const { user } = useAuth();
+  const { appointmentId, doctorId, doctorName, patientId, patientName, chatId: routeChatId } = route.params || {};
+  const { user, userProfile } = useAuth();
   const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState('');
   const [isTyping, setIsTyping] = useState(false);
+  const [chatPartnerName, setChatPartnerName] = useState('');
+  const [profilePictures, setProfilePictures] = useState({}); // Store profile pictures for users
   const flatListRef = useRef(null);
+  const unsubscribeRef = useRef(null);
 
   useEffect(() => {
-    // Load chat messages
-    loadMessages();
-    
-    // Set up real-time messaging (in a real app, use Firebase Firestore real-time listeners)
-    // For demo, we'll use mock data
-    const timer = setTimeout(() => {
-      if (messages.length === 0) {
-        setMessages(mockMessages);
+    // Load chat messages from Firebase with real-time listener
+    if (user) {
+      // Validate required parameters
+      if (!doctorId || !patientId) {
+        console.warn('Missing critical chat parameters: doctorId or patientId');
+        Alert.alert(
+          'Error', 
+          'Unable to load chat. Missing doctor or patient information.',
+          [{ text: 'Go Back', onPress: () => navigation.goBack() }]
+        );
+        return;
       }
-    }, 1000);
-
-    return () => clearTimeout(timer);
-  }, []);
+      
+      loadMessages();
+      loadChatPartnerName();
+      loadChatParticipantsProfilePictures(); // Load profile pictures for chat participants
+    } else {
+      // User is not authenticated, clear any existing data
+      setMessages([]);
+      setChatPartnerName('');
+      setProfilePictures({});
+    }
+    
+    return () => {
+      // Unsubscribe from real-time listener when component unmounts
+      if (unsubscribeRef.current) {
+        unsubscribeRef.current();
+      }
+    };
+  }, [appointmentId, doctorId, patientId, user]);
 
   useEffect(() => {
     // Scroll to bottom when new messages arrive
@@ -52,11 +88,180 @@ const ChatScreen = ({ navigation, route }) => {
     }
   }, [messages]);
 
+  const loadChatPartnerName = async () => {
+    // Check if user is authenticated
+    if (!user) {
+      console.log('User not authenticated, cannot load chat partner name');
+      return;
+    }
+    
+    // Determine the correct chat partner based on the current user's role
+    if (user.uid === doctorId) {
+      // Current user is the doctor, show patient name
+      setChatPartnerName(patientName || 'Patient');
+      console.log('Chat partner (patient):', patientName);
+      return;
+    } else if (user.uid === patientId) {
+      // Current user is the patient, show doctor name
+      setChatPartnerName(doctorName || 'Doctor');
+      console.log('Chat partner (doctor):', doctorName);
+      return;
+    }
+    
+    // If we don't have names from params, try to fetch from Firebase
+    try {
+      let partnerId;
+      if (user.uid === doctorId) {
+        partnerId = patientId;
+      } else if (user.uid === patientId) {
+        partnerId = doctorId;
+      } else {
+        // User is neither doctor nor patient - shouldn't happen
+        console.error('User is neither doctor nor patient in this chat');
+        return;
+      }
+      
+      if (partnerId) {
+        const userDoc = await getDocs(query(
+          collection(db, 'users'),
+          where('uid', '==', partnerId)
+        ));
+        
+        userDoc.forEach((doc) => {
+          const userData = doc.data();
+          const name = `${userData.firstName || ''} ${userData.lastName || ''}`.trim() || 'Healthcare Provider';
+          setChatPartnerName(name);
+          console.log('Fetched chat partner name:', name);
+        });
+      }
+    } catch (error) {
+      console.error('Error loading chat partner name:', error);
+      // Fallback name based on user role
+      if (user && user.uid === doctorId) {
+        setChatPartnerName(patientName || 'Patient');
+      } else if (user && user.uid === patientId) {
+        setChatPartnerName(doctorName || 'Doctor');
+      } else {
+        setChatPartnerName('Healthcare Provider');
+      }
+    }
+  };
+
+  // Fetch profile picture for a user from Supabase
+  const fetchUserProfilePicture = async (userId) => {
+    try {
+      // Check if we already have the profile picture URL cached
+      if (profilePictures[userId]) {
+        return profilePictures[userId];
+      }
+
+      // Fetch user data from Firestore to get profile picture URL
+      const userDocRef = doc(db, 'users', userId);
+      const userDoc = await getDoc(userDocRef);
+      
+      if (userDoc.exists()) {
+        const userData = userDoc.data();
+        const profilePictureURL = userData.profilePictureURL;
+        
+        // Update profile pictures state
+        setProfilePictures(prev => ({
+          ...prev,
+          [userId]: profilePictureURL
+        }));
+        
+        return profilePictureURL;
+      }
+    } catch (error) {
+      console.error('Error fetching user profile picture:', error);
+    }
+    return null;
+  };
+
+  // Load profile pictures for chat participants
+  const loadChatParticipantsProfilePictures = async () => {
+    try {
+      // Fetch profile pictures for both doctor and patient
+      await fetchUserProfilePicture(doctorId);
+      await fetchUserProfilePicture(patientId);
+    } catch (error) {
+      console.error('Error loading chat participants profile pictures:', error);
+    }
+  };
+
   const loadMessages = async () => {
     try {
-      // In a real app, fetch messages from Firebase
-      // For now, using mock data
-      setMessages(mockMessages);
+      // Validate that we have sufficient information to load messages
+      if (!doctorId || !patientId) {
+        console.error('Missing required parameters for chat: doctorId or patientId');
+        return;
+      }
+      
+      // Generate a consistent chat ID from doctorId and patientId
+      const participantIds = [doctorId, patientId].sort();
+      const chatIdToUse = routeChatId || `${participantIds[0]}_${participantIds[1]}`;
+      
+      console.log('Loading chat with participants:', { doctorId, patientId, chatId: chatIdToUse });
+      
+      // Create a combined query to get all messages between these users regardless of appointment
+      // Use logical OR to get messages that match either doctorId+patientId OR have the chatId
+      const messagesQuery = query(
+        collection(db, 'messages'),
+        where('doctorId', '==', doctorId),
+        where('patientId', '==', patientId)
+      );
+      
+      // Update chat metadata for tracking conversations
+      try {
+        const chatMetadataRef = doc(db, 'chatMetadata', chatIdToUse);
+        await setDoc(chatMetadataRef, {
+          doctorId,
+          patientId,
+          doctorName: doctorName || '',
+          patientName: patientName || '',
+          lastUpdated: serverTimestamp(),
+          // Don't override existing lastMessage
+        }, { merge: true });
+        console.log('Chat metadata updated successfully');
+      } catch (error) {
+        console.error('Error updating chat metadata:', error);
+      }
+      
+      // Set up real-time listener for the chat messages
+      unsubscribeRef.current = onSnapshot(messagesQuery, (snapshot) => {
+        const newMessages = [];
+        snapshot.forEach((doc) => {
+          const data = doc.data();
+          // Handle timestamp conversion properly
+          const timestamp = data.timestamp ? 
+            (typeof data.timestamp.toDate === 'function' ? data.timestamp.toDate() : data.timestamp) : 
+            new Date();
+          
+          newMessages.push({
+            id: doc.id,
+            ...data,
+            timestamp
+          });
+        });
+        
+        // Sort messages by timestamp in memory instead of using Firestore orderBy
+        newMessages.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+        
+        console.log(`Loaded ${newMessages.length} messages between doctor and patient`);
+        if (newMessages.length > 0) {
+          console.log('Sample message:', {
+            text: newMessages[0].text,
+            senderId: newMessages[0].senderId,
+            recipientId: newMessages[0].recipientId,
+            doctorId: newMessages[0].doctorId,
+            patientId: newMessages[0].patientId
+          });
+        }
+        
+        setMessages(newMessages);
+      }, (error) => {
+        console.error('Error listening to messages:', error);
+        Alert.alert('Error', 'Failed to load messages');
+      });
     } catch (error) {
       console.error('Error loading messages:', error);
       Alert.alert('Error', 'Failed to load messages');
@@ -64,84 +269,144 @@ const ChatScreen = ({ navigation, route }) => {
   };
 
   const sendMessage = async () => {
-    if (!inputText.trim()) return;
+    if (!inputText.trim() || !user) return;
 
-    const newMessage = {
-      id: Date.now().toString(),
-      text: inputText.trim(),
-      senderId: user.uid,
-      senderName: 'You',
-      timestamp: new Date().toISOString(),
-      type: 'text'
-    };
-
-    setMessages(prev => [...prev, newMessage]);
-    setInputText('');
-
-    // In a real app, send to Firebase
     try {
-      // Simulate sending message
-      console.log('Sending message:', newMessage);
+      // Validate required parameters before sending
+      if (!doctorId || !patientId) {
+        console.error('Missing required parameters for sending message: doctorId or patientId');
+        Alert.alert('Error', 'Unable to send message. Missing chat participants information.');
+        return;
+      }
+
+      // Determine recipient ID and chat parameters
+      let recipientId, recipientName, chatParams;
       
-      // Simulate doctor response after 2-3 seconds
-      setTimeout(() => {
-        const doctorResponse = {
-          id: (Date.now() + 1).toString(),
-          text: getDoctorResponse(inputText),
-          senderId: doctorId || 'doctor_1',
-          senderName: doctorName || 'Dr. Sarah Johnson',
-          timestamp: new Date().toISOString(),
-          type: 'text'
-        };
-        setMessages(prev => [...prev, doctorResponse]);
-      }, 2000 + Math.random() * 1000);
+      // Setup message parameters based on sender role
+      if (user && user.uid === doctorId) {
+        recipientId = patientId;
+        recipientName = patientName || 'Patient';
+      } else if (user && user.uid === patientId) {
+        recipientId = doctorId;
+        recipientName = doctorName || 'Doctor';
+      } else {
+        console.error('Current user is neither doctor nor patient');
+        Alert.alert('Error', 'Unable to send message. User role mismatch.');
+        return;
+      }
       
+      // Create a consistent chatId regardless of chat type
+      const participantIds = [doctorId, patientId].sort();
+      const chatIdToUse = routeChatId || `${participantIds[0]}_${participantIds[1]}`;
+      
+      // Always include both appointment and chat information when available
+      chatParams = {
+        doctorId,
+        patientId,
+        chatId: chatIdToUse
+      };
+      
+      // Add appointmentId if available, but it's optional
+      if (appointmentId) {
+        chatParams.appointmentId = appointmentId;
+      }
+      
+      console.log('Sending message with params:', chatParams);
+      
+      // Update chat metadata with the latest message
+      try {
+        const chatMetadataRef = doc(db, 'chatMetadata', chatIdToUse);
+        await setDoc(chatMetadataRef, {
+          lastMessage: inputText.trim(),
+          lastUpdated: serverTimestamp()
+        }, { merge: true });
+        console.log('Updated chat metadata with latest message');
+      } catch (error) {
+        console.error('Error updating chat metadata with last message:', error);
+      }
+      
+      // Prepare message data
+      const senderName = userProfile?.firstName ? 
+        `${userProfile.firstName} ${userProfile.lastName || ''}` : 
+        (user && user.uid === doctorId ? doctorName : patientName) || 'You';
+        
+      const messageData = {
+        text: inputText.trim(),
+        senderId: user.uid,
+        senderName: senderName,
+        recipientId: recipientId,
+        recipientName: recipientName,
+        timestamp: serverTimestamp(),
+        type: 'text',
+        ...chatParams
+      };
+
+      // Add message to Firebase
+      const docRef = await addDoc(collection(db, 'messages'), messageData);
+      
+      // Send push notification to the recipient
+      if (recipientId) {
+        await NotificationService.createChatMessageNotification(recipientId, {
+          id: docRef.id,
+          ...messageData
+        });
+      }
+      
+      setInputText('');
     } catch (error) {
       console.error('Error sending message:', error);
       Alert.alert('Error', 'Failed to send message');
     }
   };
 
-  const getDoctorResponse = (patientMessage) => {
-    const responses = [
-      "Thank you for your message. I understand your concern.",
-      "Based on what you've described, I recommend the following...",
-      "That's a great question. Let me explain...",
-      "I see. Can you tell me more about when this started?",
-      "For this condition, I usually recommend...",
-      "Please continue taking your medication as prescribed.",
-      "I'd like to schedule a follow-up appointment to monitor your progress."
-    ];
-    return responses[Math.floor(Math.random() * responses.length)];
-  };
-
-  const sendQuickMessage = (message) => {
-    setInputText(message);
-    // Auto-send quick messages
-    setTimeout(() => {
-      sendMessage();
-    }, 100);
-  };
-
   const MessageBubble = ({ item }) => {
-    const isMyMessage = item.senderId === user.uid;
+    // Check if this message was sent by the current user
+    // Add null check for user to prevent errors during logout
+    const isMyMessage = user && item.senderId === user.uid;
+    
+    console.log('Rendering message:', {
+      text: item.text,
+      senderId: item.senderId,
+      currentUserId: user?.uid,
+      isMyMessage
+    });
+    
     const messageTime = new Date(item.timestamp).toLocaleTimeString([], { 
       hour: '2-digit', 
       minute: '2-digit' 
     });
+
+    // Determine the correct sender name to display
+    const displayName = isMyMessage ? 'You' : item.senderName;
+    
+    // Get profile picture for the sender
+    const senderProfilePicture = profilePictures[item.senderId];
 
     return (
       <View style={[
         styles.messageContainer,
         isMyMessage ? styles.myMessage : styles.otherMessage
       ]}>
+        {!isMyMessage && (
+          <View style={styles.messageHeader}>
+            {senderProfilePicture ? (
+              <Image 
+                source={{ uri: senderProfilePicture }} 
+                style={styles.senderAvatar}
+                onError={() => console.log('Sender avatar image load error')}
+              />
+            ) : (
+              <View style={styles.senderAvatarPlaceholder}>
+                <Ionicons name="person" size={16} color={COLORS.WHITE} />
+              </View>
+            )}
+            <Text style={styles.senderName}>{displayName}</Text>
+          </View>
+        )}
         <View style={[
           styles.messageBubble,
           isMyMessage ? styles.myMessageBubble : styles.otherMessageBubble
         ]}>
-          {!isMyMessage && (
-            <Text style={styles.senderName}>{item.senderName}</Text>
-          )}
           <Text style={[
             styles.messageText,
             isMyMessage ? styles.myMessageText : styles.otherMessageText
@@ -165,6 +430,14 @@ const ChatScreen = ({ navigation, route }) => {
     </TouchableOpacity>
   );
 
+  const sendQuickMessage = (message) => {
+    setInputText(message);
+    // Auto-send quick messages
+    setTimeout(() => {
+      sendMessage();
+    }, 100);
+  };
+
   return (
     <SafeAreaView style={styles.container}>
       <KeyboardAvoidingView 
@@ -180,11 +453,21 @@ const ChatScreen = ({ navigation, route }) => {
             <Ionicons name="arrow-back" size={24} color={COLORS.WHITE} />
           </TouchableOpacity>
           <View style={styles.doctorInfo}>
-            <View style={styles.doctorAvatar}>
-              <Ionicons name="person" size={20} color={COLORS.WHITE} />
-            </View>
+            {user && profilePictures[user.uid === doctorId ? patientId : doctorId] ? (
+              <Image 
+                source={{ uri: profilePictures[user.uid === doctorId ? patientId : doctorId] }} 
+                style={styles.doctorAvatar}
+                onError={() => console.log('Chat partner avatar image load error')}
+              />
+            ) : (
+              <View style={styles.doctorAvatar}>
+                <Ionicons name="person" size={20} color={COLORS.WHITE} />
+              </View>
+            )}
             <View>
-              <Text style={styles.doctorName}>{doctorName || 'Dr. Sarah Johnson'}</Text>
+              <Text style={styles.doctorName}>
+                {chatPartnerName || (user && user.uid === doctorId ? patientName : doctorName) || 'Chat Partner'}
+              </Text>
               <Text style={styles.doctorStatus}>Online</Text>
             </View>
           </View>
@@ -198,10 +481,15 @@ const ChatScreen = ({ navigation, route }) => {
           ref={flatListRef}
           data={messages}
           keyExtractor={(item) => item.id}
-          renderItem={MessageBubble}
+          renderItem={({ item }) => <MessageBubble item={item} />}
           style={styles.messagesList}
           contentContainerStyle={styles.messagesContainer}
           showsVerticalScrollIndicator={false}
+          ListEmptyComponent={
+            <View style={styles.emptyMessageContainer}>
+              <Text style={styles.emptyMessageText}>No messages yet. Start a conversation!</Text>
+            </View>
+          }
         />
 
         {/* Quick Replies */}
@@ -247,49 +535,8 @@ const ChatScreen = ({ navigation, route }) => {
   );
 };
 
-// Mock messages for demonstration
-const mockMessages = [
-  {
-    id: '1',
-    text: 'Hello! I\'m Dr. Sarah Johnson. How can I help you today?',
-    senderId: 'doctor_1',
-    senderName: 'Dr. Sarah Johnson',
-    timestamp: new Date(Date.now() - 300000).toISOString(),
-    type: 'text'
-  },
-  {
-    id: '2',
-    text: 'Hi doctor, I\'ve been having some chest pain since yesterday.',
-    senderId: 'patient_1',
-    senderName: 'You',
-    timestamp: new Date(Date.now() - 240000).toISOString(),
-    type: 'text'
-  },
-  {
-    id: '3',
-    text: 'I understand your concern. Can you describe the pain? Is it sharp, dull, or burning?',
-    senderId: 'doctor_1',
-    senderName: 'Dr. Sarah Johnson',
-    timestamp: new Date(Date.now() - 180000).toISOString(),
-    type: 'text'
-  },
-  {
-    id: '4',
-    text: 'It\'s more of a dull ache, and it gets worse when I take deep breaths.',
-    senderId: 'patient_1',
-    senderName: 'You',
-    timestamp: new Date(Date.now() - 120000).toISOString(),
-    type: 'text'
-  },
-  {
-    id: '5',
-    text: 'Thank you for the details. Based on your symptoms, I\'d like to schedule you for an EKG and chest X-ray. In the meantime, please avoid strenuous activities.',
-    senderId: 'doctor_1',
-    senderName: 'Dr. Sarah Johnson',
-    timestamp: new Date(Date.now() - 60000).toISOString(),
-    type: 'text'
-  }
-];
+// Mock messages for demonstration (no longer needed with real-time Firebase)
+// const mockMessages = [...];
 
 const styles = StyleSheet.create({
   container: {
@@ -344,6 +591,26 @@ const styles = StyleSheet.create({
   messageContainer: {
     marginBottom: SPACING.MD,
   },
+  messageHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: SPACING.XS / 2,
+  },
+  senderAvatar: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    marginRight: SPACING.XS,
+  },
+  senderAvatarPlaceholder: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: COLORS.PRIMARY,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: SPACING.XS,
+  },
   myMessage: {
     alignItems: 'flex-end',
   },
@@ -373,7 +640,6 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZES.XS,
     fontWeight: '600',
     color: COLORS.PRIMARY,
-    marginBottom: SPACING.XS / 2,
   },
   messageText: {
     fontSize: FONT_SIZES.MD,
@@ -395,6 +661,17 @@ const styles = StyleSheet.create({
   },
   otherMessageTime: {
     color: COLORS.TEXT_SECONDARY,
+  },
+  emptyMessageContainer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: SPACING.XL,
+  },
+  emptyMessageText: {
+    fontSize: FONT_SIZES.MD,
+    color: COLORS.TEXT_SECONDARY,
+    textAlign: 'center',
   },
   quickRepliesContainer: {
     backgroundColor: COLORS.WHITE,

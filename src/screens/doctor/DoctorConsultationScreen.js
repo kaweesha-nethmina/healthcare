@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -13,13 +13,26 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../context/AuthContext';
 import {
+  collection,
+  query,
+  where,
+  orderBy,
+  onSnapshot,
+  doc,
+  updateDoc,
+  serverTimestamp
+} from 'firebase/firestore';
+import { db } from '../../services/firebase';
+import {
   COLORS,
   FONT_SIZES,
   SPACING,
-  BORDER_RADIUS
+  BORDER_RADIUS,
+  CONSULTATION_STATUS
 } from '../../constants';
 import Card from '../../components/Card';
 import Button from '../../components/Button';
+import NotificationService from '../../services/notificationService';
 
 const DoctorConsultationScreen = ({ navigation }) => {
   const { userProfile } = useAuth();
@@ -28,19 +41,65 @@ const DoctorConsultationScreen = ({ navigation }) => {
   const [filterStatus, setFilterStatus] = useState('active'); // active, scheduled, completed, all
   const [showConsultationModal, setShowConsultationModal] = useState(false);
   const [selectedConsultation, setSelectedConsultation] = useState(null);
+  const consultationsListenerRef = useRef(null);
 
   useEffect(() => {
     loadConsultations();
+    return () => {
+      // Clean up listener when component unmounts
+      if (consultationsListenerRef.current) {
+        consultationsListenerRef.current();
+      }
+    };
   }, []);
 
   const loadConsultations = async () => {
     try {
-      // In a real app, fetch from Firebase
-      // For now, using mock data
-      setConsultations(mockConsultations);
+      if (!userProfile?.uid) return;
+      
+      // Set up real-time listener for doctor's consultations
+      // Using in-memory sorting to avoid composite index requirement
+      const consultationsQuery = query(
+        collection(db, 'appointments'),
+        where('doctorId', '==', userProfile.uid)
+        // Removed orderBy('createdAt', 'desc') to avoid composite index
+      );
+      
+      consultationsListenerRef.current = onSnapshot(consultationsQuery, (snapshot) => {
+        const consultationsData = [];
+        snapshot.forEach((doc) => {
+          const data = doc.data();
+          // Handle timestamp conversion properly
+          const createdAt = data.createdAt ? 
+            (typeof data.createdAt.toDate === 'function' ? data.createdAt.toDate() : data.createdAt) : 
+            new Date();
+          const updatedAt = data.updatedAt ? 
+            (typeof data.updatedAt.toDate === 'function' ? data.updatedAt.toDate() : data.updatedAt) : 
+            new Date();
+          
+          consultationsData.push({
+            id: doc.id,
+            ...data,
+            createdAt,
+            updatedAt
+          });
+        });
+        
+        // Sort in memory instead of using Firestore orderBy
+        consultationsData.sort((a, b) => {
+          const dateA = a.createdAt || new Date(0);
+          const dateB = b.createdAt || new Date(0);
+          return dateB - dateA; // Descending order (newest first)
+        });
+        
+        setConsultations(consultationsData);
+      }, (error) => {
+        console.error('Error listening to consultations:', error);
+        setConsultations([]);
+      });
     } catch (error) {
       console.error('Error loading consultations:', error);
-      setConsultations(mockConsultations);
+      setConsultations([]);
     }
   };
 
@@ -48,6 +107,31 @@ const DoctorConsultationScreen = ({ navigation }) => {
     setRefreshing(true);
     await loadConsultations();
     setRefreshing(false);
+  };
+
+  const updateConsultationStatus = async (consultationId, newStatus) => {
+    try {
+      const consultationRef = doc(db, 'appointments', consultationId);
+      await updateDoc(consultationRef, {
+        status: newStatus,
+        updatedAt: serverTimestamp()
+      });
+      
+      // Create notification for patient
+      const consultation = consultations.find(c => c.id === consultationId);
+      if (consultation) {
+        await NotificationService.createAppointmentNotification(
+          consultation.patientId,
+          consultation,
+          newStatus
+        );
+      }
+      
+      console.log(`Consultation ${consultationId} status updated to ${newStatus}`);
+    } catch (error) {
+      console.error('Error updating consultation status:', error);
+      Alert.alert('Error', 'Failed to update consultation status');
+    }
   };
 
   const getConsultationTypeIcon = (type) => {
@@ -78,13 +162,13 @@ const DoctorConsultationScreen = ({ navigation }) => {
 
   const getStatusColor = (status) => {
     switch (status) {
-      case 'active':
+      case CONSULTATION_STATUS.ONGOING:
         return COLORS.SUCCESS;
-      case 'scheduled':
+      case CONSULTATION_STATUS.CONFIRMED:
         return COLORS.WARNING;
-      case 'completed':
+      case CONSULTATION_STATUS.COMPLETED:
         return COLORS.INFO;
-      case 'cancelled':
+      case CONSULTATION_STATUS.CANCELLED:
         return COLORS.ERROR;
       default:
         return COLORS.GRAY_MEDIUM;
@@ -102,6 +186,9 @@ const DoctorConsultationScreen = ({ navigation }) => {
           });
         } else if (consultation.type === 'chat') {
           navigation.navigate('Chat', {
+            appointmentId: consultation.id,
+            doctorId: consultation.doctorId,
+            doctorName: consultation.doctorName,
             patientId: consultation.patientId,
             patientName: consultation.patientName
           });
@@ -128,11 +215,8 @@ const DoctorConsultationScreen = ({ navigation }) => {
             {
               text: 'Yes, Cancel',
               style: 'destructive',
-              onPress: () => {
-                const updated = consultations.map(c =>
-                  c.id === consultation.id ? { ...c, status: 'cancelled' } : c
-                );
-                setConsultations(updated);
+              onPress: async () => {
+                await updateConsultationStatus(consultation.id, CONSULTATION_STATUS.CANCELLED);
               }
             }
           ]
@@ -142,25 +226,48 @@ const DoctorConsultationScreen = ({ navigation }) => {
         setSelectedConsultation(consultation);
         setShowConsultationModal(true);
         break;
+      case 'start':
+        Alert.alert(
+          'Start Consultation',
+          `Start consultation with ${consultation.patientName}?`,
+          [
+            { text: 'Cancel', style: 'cancel' },
+            {
+              text: 'Start',
+              onPress: async () => {
+                await updateConsultationStatus(consultation.id, CONSULTATION_STATUS.ONGOING);
+              }
+            }
+          ]
+        );
+        break;
       default:
         break;
     }
   };
 
-  const completeConsultation = (notes, prescription) => {
-    const updated = consultations.map(c =>
-      c.id === selectedConsultation.id 
-        ? { ...c, status: 'completed', notes, prescription } 
-        : c
-    );
-    setConsultations(updated);
-    setShowConsultationModal(false);
-    Alert.alert('Success', 'Consultation completed successfully');
+  const completeConsultation = async (notes, prescription) => {
+    try {
+      await updateConsultationStatus(selectedConsultation.id, CONSULTATION_STATUS.COMPLETED);
+      setShowConsultationModal(false);
+      Alert.alert('Success', 'Consultation completed successfully');
+    } catch (error) {
+      console.error('Error completing consultation:', error);
+      Alert.alert('Error', 'Failed to complete consultation');
+    }
   };
 
   const filteredConsultations = consultations.filter(consultation => {
     if (filterStatus === 'all') return true;
-    return consultation.status === filterStatus;
+    
+    // Map UI filter status to actual consultation status
+    const statusMap = {
+      'active': CONSULTATION_STATUS.ONGOING,
+      'scheduled': CONSULTATION_STATUS.CONFIRMED,
+      'completed': CONSULTATION_STATUS.COMPLETED
+    };
+    
+    return consultation.status === (statusMap[filterStatus] || filterStatus);
   });
 
   const isConsultationTime = (dateTime) => {
@@ -185,11 +292,12 @@ const DoctorConsultationScreen = ({ navigation }) => {
   );
 
   const ConsultationCard = ({ consultation }) => {
-    const canJoin = consultation.status === 'active' || 
-                   (consultation.status === 'scheduled' && isConsultationTime(consultation.scheduledTime));
-    const canReschedule = consultation.status === 'scheduled';
-    const canCancel = ['scheduled', 'active'].includes(consultation.status);
-    const canComplete = consultation.status === 'active';
+    const canJoin = consultation.status === CONSULTATION_STATUS.ONGOING || 
+                   (consultation.status === CONSULTATION_STATUS.CONFIRMED && isConsultationTime(consultation.appointmentDate + 'T' + consultation.appointmentTime));
+    const canReschedule = consultation.status === CONSULTATION_STATUS.CONFIRMED;
+    const canCancel = [CONSULTATION_STATUS.CONFIRMED, CONSULTATION_STATUS.ONGOING].includes(consultation.status);
+    const canComplete = consultation.status === CONSULTATION_STATUS.ONGOING;
+    const canStart = consultation.status === CONSULTATION_STATUS.CONFIRMED;
 
     return (
       <Card style={styles.consultationCard}>
@@ -211,8 +319,8 @@ const DoctorConsultationScreen = ({ navigation }) => {
                 {consultation.type.charAt(0).toUpperCase() + consultation.type.slice(1)} Consultation
               </Text>
               <Text style={styles.consultationTime}>
-                {consultation.scheduledTime ? 
-                  new Date(consultation.scheduledTime).toLocaleString() : 
+                {consultation.appointmentDate ? 
+                  `${consultation.appointmentDate} at ${consultation.appointmentTime}` : 
                   'In Progress'
                 }
               </Text>
@@ -224,25 +332,27 @@ const DoctorConsultationScreen = ({ navigation }) => {
               { backgroundColor: getStatusColor(consultation.status) }
             ]}>
               <Text style={styles.statusText}>
-                {consultation.status.charAt(0).toUpperCase() + consultation.status.slice(1)}
+                {consultation.status.replace('_', ' ').charAt(0).toUpperCase() + consultation.status.replace('_', ' ').slice(1)}
               </Text>
             </View>
           </View>
         </View>
 
-        <Text style={styles.consultationReason}>{consultation.reason}</Text>
-
-        {consultation.duration && (
-          <View style={styles.consultationMeta}>
-            <Ionicons name="time-outline" size={16} color={COLORS.TEXT_SECONDARY} />
-            <Text style={styles.metaText}>Duration: {consultation.duration} minutes</Text>
-          </View>
-        )}
+        <Text style={styles.consultationReason}>{consultation.symptoms}</Text>
 
         <View style={styles.consultationActions}>
+          {canStart && (
+            <Button
+              title="Start"
+              onPress={() => handleConsultationAction(consultation, 'start')}
+              style={styles.actionButton}
+              variant="success"
+              size="small"
+            />
+          )}
           {canJoin && (
             <Button
-              title={consultation.status === 'active' ? 'Rejoin' : 'Join'}
+              title={consultation.status === CONSULTATION_STATUS.ONGOING ? 'Rejoin' : 'Join'}
               onPress={() => handleConsultationAction(consultation, 'join')}
               style={styles.actionButton}
               variant="primary"
@@ -277,6 +387,9 @@ const DoctorConsultationScreen = ({ navigation }) => {
           <TouchableOpacity
             style={styles.iconButton}
             onPress={() => navigation.navigate('Chat', {
+              appointmentId: consultation.id,
+              doctorId: consultation.doctorId,
+              doctorName: consultation.doctorName,
               patientId: consultation.patientId,
               patientName: consultation.patientName
             })}
@@ -321,12 +434,8 @@ const DoctorConsultationScreen = ({ navigation }) => {
                 </Text>
               </View>
               <View style={styles.summaryRow}>
-                <Text style={styles.summaryLabel}>Duration:</Text>
-                <Text style={styles.summaryValue}>{selectedConsultation?.duration || 30} minutes</Text>
-              </View>
-              <View style={styles.summaryRow}>
                 <Text style={styles.summaryLabel}>Reason:</Text>
-                <Text style={styles.summaryValue}>{selectedConsultation?.reason}</Text>
+                <Text style={styles.summaryValue}>{selectedConsultation?.symptoms}</Text>
               </View>
             </View>
 
@@ -393,9 +502,9 @@ const DoctorConsultationScreen = ({ navigation }) => {
 
   const getStatusCounts = () => {
     return {
-      active: consultations.filter(c => c.status === 'active').length,
-      scheduled: consultations.filter(c => c.status === 'scheduled').length,
-      completed: consultations.filter(c => c.status === 'completed').length,
+      active: consultations.filter(c => c.status === CONSULTATION_STATUS.ONGOING).length,
+      scheduled: consultations.filter(c => c.status === CONSULTATION_STATUS.CONFIRMED).length,
+      completed: consultations.filter(c => c.status === CONSULTATION_STATUS.COMPLETED).length,
       all: consultations.length
     };
   };
@@ -472,7 +581,7 @@ const DoctorConsultationScreen = ({ navigation }) => {
       <ScrollView
         style={styles.consultationsList}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-        showsVerticalScrollIndicator={false}
+        showsVerticalScrollIndicator={False}
       >
         {filteredConsultations.length === 0 ? (
           <Card style={styles.emptyState}>
@@ -496,64 +605,6 @@ const DoctorConsultationScreen = ({ navigation }) => {
     </SafeAreaView>
   );
 };
-
-// Mock consultations data
-const mockConsultations = [
-  {
-    id: '1',
-    patientId: 'patient_1',
-    patientName: 'John Smith',
-    type: 'video',
-    status: 'active',
-    reason: 'Follow-up consultation for blood pressure monitoring',
-    scheduledTime: null, // Currently active
-    duration: 30,
-    startTime: new Date(Date.now() - 15 * 60 * 1000).toISOString() // Started 15 min ago
-  },
-  {
-    id: '2',
-    patientId: 'patient_2',
-    patientName: 'Sarah Wilson',
-    type: 'video',
-    status: 'scheduled',
-    reason: 'Annual physical examination discussion',
-    scheduledTime: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(), // 2 hours from now
-    duration: 45
-  },
-  {
-    id: '3',
-    patientId: 'patient_3',
-    patientName: 'Mike Johnson',
-    type: 'chat',
-    status: 'active',
-    reason: 'Prescription renewal consultation',
-    scheduledTime: null,
-    duration: 20,
-    startTime: new Date(Date.now() - 5 * 60 * 1000).toISOString() // Started 5 min ago
-  },
-  {
-    id: '4',
-    patientId: 'patient_4',
-    patientName: 'Emily Davis',
-    type: 'audio',
-    status: 'scheduled',
-    reason: 'Quick check-in for medication side effects',
-    scheduledTime: new Date(Date.now() + 5 * 60 * 1000).toISOString(), // 5 minutes from now
-    duration: 15
-  },
-  {
-    id: '5',
-    patientId: 'patient_5',
-    patientName: 'Robert Brown',
-    type: 'video',
-    status: 'completed',
-    reason: 'Surgical consultation follow-up',
-    scheduledTime: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(), // 2 hours ago
-    duration: 60,
-    completedTime: new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString(),
-    notes: 'Patient recovering well from surgery'
-  }
-];
 
 const styles = StyleSheet.create({
   container: {
@@ -696,16 +747,6 @@ const styles = StyleSheet.create({
     color: COLORS.TEXT_SECONDARY,
     marginBottom: SPACING.SM,
     lineHeight: 18,
-  },
-  consultationMeta: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: SPACING.SM,
-  },
-  metaText: {
-    fontSize: FONT_SIZES.XS,
-    color: COLORS.TEXT_SECONDARY,
-    marginLeft: SPACING.XS,
   },
   consultationActions: {
     flexDirection: 'row',

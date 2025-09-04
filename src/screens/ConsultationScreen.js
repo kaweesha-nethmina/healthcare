@@ -1,374 +1,309 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   SafeAreaView,
   ScrollView,
-  TouchableOpacity,
-  TextInput,
-  Alert,
-  ActivityIndicator
+  TouchableOpacity
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
+import {
+  collection,
+  query,
+  where,
+  orderBy,
+  onSnapshot
+} from 'firebase/firestore';
+import { db } from '../services/firebase';
 import {
   COLORS,
   FONT_SIZES,
   SPACING,
   BORDER_RADIUS,
-  MEDICAL_SPECIALIZATIONS,
   CONSULTATION_STATUS
 } from '../constants';
 import Card from '../components/Card';
-import Button from '../components/Button';
-import { collection, query, where, getDocs, orderBy } from 'firebase/firestore';
-import { db } from '../services/firebase';
 
 const ConsultationScreen = ({ navigation }) => {
-  const { user } = useAuth();
-  const [searchQuery, setSearchQuery] = useState('');
-  const [selectedSpecialization, setSelectedSpecialization] = useState('');
-  const [upcomingAppointments, setUpcomingAppointments] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const { userProfile, isPatient } = useAuth();
+  const [appointments, setAppointments] = useState([]);
+  const appointmentsListenerRef = useRef(null);
 
   useEffect(() => {
-    loadUpcomingAppointments();
+    loadAppointments();
+    return () => {
+      // Clean up listener when component unmounts
+      if (appointmentsListenerRef.current) {
+        appointmentsListenerRef.current();
+      }
+    };
   }, []);
 
-  const loadUpcomingAppointments = async () => {
+  const loadAppointments = async () => {
     try {
-      setLoading(true);
+      if (!userProfile?.uid) return;
       
-      // Option 1: Simple query without orderBy to avoid index requirement
-      // We'll sort in memory instead
+      // Set up real-time listener for patient's appointments
+      // Using in-memory sorting to avoid composite index requirement
       const appointmentsQuery = query(
         collection(db, 'appointments'),
-        where('patientId', '==', user.uid),
-        where('status', 'in', [CONSULTATION_STATUS.PENDING, CONSULTATION_STATUS.CONFIRMED])
+        where('patientId', '==', userProfile.uid)
+        // Removed orderBy('appointmentDate', 'asc') to avoid composite index
       );
       
-      const snapshot = await getDocs(appointmentsQuery);
-      const appointments = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
-      
-      // Sort appointments by date in memory
-      const sortedAppointments = appointments.sort((a, b) => {
-        const dateA = new Date(a.appointmentDate);
-        const dateB = new Date(b.appointmentDate);
-        return dateA - dateB;
-      });
-      
-      setUpcomingAppointments(sortedAppointments);
-      
-    } catch (error) {
-      console.error('Error loading appointments:', error);
-      
-      // If Firestore query fails, try alternative approach or use mock data
-      try {
-        console.log('Trying alternative query approach...');
+      appointmentsListenerRef.current = onSnapshot(appointmentsQuery, (snapshot) => {
+        const appointmentsData = [];
+        snapshot.forEach((doc) => {
+          const data = doc.data();
+          // Handle timestamp conversion properly
+          const createdAt = data.createdAt ? 
+            (typeof data.createdAt.toDate === 'function' ? data.createdAt.toDate() : data.createdAt) : 
+            new Date();
+          const updatedAt = data.updatedAt ? 
+            (typeof data.updatedAt.toDate === 'function' ? data.updatedAt.toDate() : data.updatedAt) : 
+            new Date();
+          
+          appointmentsData.push({
+            id: doc.id,
+            ...data,
+            createdAt,
+            updatedAt
+          });
+        });
         
-        // Alternative: Query each status separately and combine
-        const pendingQuery = query(
-          collection(db, 'appointments'),
-          where('patientId', '==', user.uid),
-          where('status', '==', CONSULTATION_STATUS.PENDING)
-        );
-        
-        const confirmedQuery = query(
-          collection(db, 'appointments'),
-          where('patientId', '==', user.uid),
-          where('status', '==', CONSULTATION_STATUS.CONFIRMED)
-        );
-        
-        const [pendingSnapshot, confirmedSnapshot] = await Promise.all([
-          getDocs(pendingQuery),
-          getDocs(confirmedQuery)
-        ]);
-        
-        const pendingAppointments = pendingSnapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        }));
-        
-        const confirmedAppointments = confirmedSnapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        }));
-        
-        // Combine and sort
-        const allAppointments = [...pendingAppointments, ...confirmedAppointments];
-        const sortedAppointments = allAppointments.sort((a, b) => {
+        // Sort in memory instead of using Firestore orderBy
+        appointmentsData.sort((a, b) => {
           const dateA = new Date(a.appointmentDate);
           const dateB = new Date(b.appointmentDate);
           return dateA - dateB;
         });
         
-        setUpcomingAppointments(sortedAppointments);
-        console.log('Alternative query succeeded');
-        
-      } catch (alternativeError) {
-        console.error('Alternative query also failed:', alternativeError);
-        // For demo purposes, use mock data if Firebase query fails
-        setUpcomingAppointments(mockAppointments);
-      }
-    } finally {
-      setLoading(false);
+        setAppointments(appointmentsData);
+      }, (error) => {
+        console.error('Error listening to appointments:', error);
+      });
+    } catch (error) {
+      console.error('Error loading appointments:', error);
     }
   };
 
-  const handleBookNewAppointment = () => {
-    navigation.navigate('DoctorList', {
-      searchQuery,
-      specialization: selectedSpecialization
-    });
+  const getUpcomingAppointments = () => {
+    return appointments.filter(appointment => 
+      [CONSULTATION_STATUS.CONFIRMED, CONSULTATION_STATUS.ONGOING].includes(appointment.status)
+    );
   };
 
-  const handleAppointmentPress = (appointment) => {
-    if (appointment.status === CONSULTATION_STATUS.CONFIRMED) {
-      // Navigate to chat or video call based on appointment type
-      if (appointment.type === 'video') {
-        navigation.navigate('VideoCall', { appointmentId: appointment.id });
-      } else {
-        navigation.navigate('Chat', { appointmentId: appointment.id });
-      }
-    } else {
-      Alert.alert(
-        'Appointment Details',
-        `Status: ${appointment.status}\nDate: ${appointment.appointmentDate}\nTime: ${appointment.appointmentTime}`,
-        [{ text: 'OK' }]
-      );
+  const consultationOptions = [
+    {
+      title: 'Find a Doctor',
+      subtitle: 'Browse and book appointments',
+      icon: 'search',
+      color: COLORS.PRIMARY,
+      onPress: () => navigation.navigate('DoctorList'),
+      show: isPatient
+    },
+    {
+      title: 'My Appointments',
+      subtitle: 'View upcoming appointments',
+      icon: 'calendar',
+      color: COLORS.INFO,
+      onPress: () => navigation.navigate('PatientAppointments'),
+      show: isPatient
+    },
+    {
+      title: 'Telemedicine Tools',
+      subtitle: 'Advanced remote monitoring',
+      icon: 'pulse',
+      color: COLORS.SUCCESS,
+      onPress: () => navigation.navigate('Telemedicine'),
+      show: isPatient
+    },
+    {
+      title: 'Chat with Doctor',
+      subtitle: 'Send messages to your doctor',
+      icon: 'chatbubble',
+      color: COLORS.ACCENT,
+      onPress: () => navigation.navigate('DoctorList', { chatMode: true }),
+      show: isPatient
+    },
+    {
+      title: 'Video Consultation',
+      subtitle: 'Real-time video appointments',
+      icon: 'videocam',
+      color: COLORS.SECONDARY,
+      onPress: () => navigation.navigate('VideoCall'),
+      show: isPatient
     }
-  };
+  ];
 
-  const AppointmentCard = ({ appointment }) => {
-    const getStatusColor = (status) => {
-      switch (status) {
-        case CONSULTATION_STATUS.CONFIRMED:
-          return COLORS.SUCCESS;
-        case CONSULTATION_STATUS.PENDING:
-          return COLORS.WARNING;
-        default:
-          return COLORS.GRAY_MEDIUM;
-      }
-    };
-
+  const renderConsultationOption = (option) => {
+    if (!option.show) return null;
+    
     return (
       <TouchableOpacity
-        style={styles.appointmentCard}
-        onPress={() => handleAppointmentPress(appointment)}
+        key={option.title}
+        style={styles.optionContainer}
+        onPress={option.onPress}
       >
-        <View style={styles.appointmentHeader}>
-          <View style={styles.doctorInfo}>
-            <View style={styles.doctorAvatar}>
-              <Ionicons name="person" size={24} color={COLORS.WHITE} />
-            </View>
-            <View style={styles.doctorDetails}>
-              <Text style={styles.doctorName}>{appointment.doctorName}</Text>
-              <Text style={styles.doctorSpecialization}>{appointment.specialization}</Text>
-            </View>
+        <Card style={styles.optionCard}>
+          <View style={[styles.optionIcon, { backgroundColor: option.color + '20' }]}>
+            <Ionicons name={option.icon} size={32} color={option.color} />
           </View>
-          <View style={[styles.statusBadge, { backgroundColor: getStatusColor(appointment.status) }]}>
-            <Text style={styles.statusText}>{appointment.status}</Text>
+          <View style={styles.optionText}>
+            <Text style={styles.optionTitle}>{option.title}</Text>
+            <Text style={styles.optionSubtitle}>{option.subtitle}</Text>
           </View>
-        </View>
-        
-        <View style={styles.appointmentDetails}>
-          <View style={styles.detailItem}>
-            <Ionicons name="calendar-outline" size={16} color={COLORS.TEXT_SECONDARY} />
-            <Text style={styles.detailText}>{appointment.appointmentDate}</Text>
-          </View>
-          <View style={styles.detailItem}>
-            <Ionicons name="time-outline" size={16} color={COLORS.TEXT_SECONDARY} />
-            <Text style={styles.detailText}>{appointment.appointmentTime}</Text>
-          </View>
-          <View style={styles.detailItem}>
-            <Ionicons name="videocam-outline" size={16} color={COLORS.TEXT_SECONDARY} />
-            <Text style={styles.detailText}>{appointment.type === 'video' ? 'Video Call' : 'Chat'}</Text>
-          </View>
-        </View>
+          <Ionicons name="chevron-forward" size={24} color={COLORS.GRAY_MEDIUM} />
+        </Card>
       </TouchableOpacity>
     );
   };
 
-  const SpecializationChip = ({ specialization, isSelected, onPress }) => (
-    <TouchableOpacity
-      style={[
-        styles.specializationChip,
-        isSelected && styles.selectedChip
-      ]}
-      onPress={onPress}
-    >
-      <Text style={[
-        styles.chipText,
-        isSelected && styles.selectedChipText
-      ]}>
-        {specialization}
+  const AppointmentCard = ({ appointment }) => (
+    <Card style={styles.appointmentCard}>
+      <View style={styles.appointmentHeader}>
+        <Text style={styles.appointmentTitle}>{appointment.doctorName}</Text>
+        <View style={styles.appointmentStatus}>
+          <View style={[
+            styles.statusBadge, 
+            { 
+              backgroundColor: 
+                appointment.status === CONSULTATION_STATUS.CONFIRMED ? COLORS.WARNING :
+                appointment.status === CONSULTATION_STATUS.ONGOING ? COLORS.SUCCESS :
+                COLORS.GRAY_MEDIUM
+            }
+          ]}>
+            <Text style={styles.statusText}>
+              {appointment.status.replace('_', ' ').charAt(0).toUpperCase() + appointment.status.replace('_', ' ').slice(1)}
+            </Text>
+          </View>
+        </View>
+      </View>
+      <Text style={styles.appointmentSubtitle}>
+        {appointment.specialization}
       </Text>
-    </TouchableOpacity>
+      <Text style={styles.appointmentDate}>
+        {appointment.appointmentDate} at {appointment.appointmentTime}
+      </Text>
+      <View style={styles.appointmentActions}>
+        {appointment.status === CONSULTATION_STATUS.ONGOING && (
+          <TouchableOpacity
+            style={styles.joinButton}
+            onPress={() => {
+              if (appointment.type === 'video') {
+                navigation.navigate('VideoCall', {
+                  consultationId: appointment.id,
+                  doctorId: appointment.doctorId,
+                  doctorName: appointment.doctorName
+                });
+              } else if (appointment.type === 'chat') {
+                navigation.navigate('Chat', {
+                  appointmentId: appointment.id,
+                  doctorId: appointment.doctorId,
+                  doctorName: appointment.doctorName
+                });
+              }
+            }}
+          >
+            <Text style={styles.joinButtonText}>Join Now</Text>
+          </TouchableOpacity>
+        )}
+        <TouchableOpacity
+          style={styles.detailsButton}
+          onPress={() => Alert.alert('Appointment Details', 'View appointment details here')}
+        >
+          <Text style={styles.detailsButtonText}>View Details</Text>
+        </TouchableOpacity>
+      </View>
+    </Card>
   );
+
+  const upcomingAppointments = getUpcomingAppointments();
 
   return (
     <SafeAreaView style={styles.container}>
-      <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
-        {/* Header */}
-        <View style={styles.header}>
-          <Text style={styles.title}>Find a Doctor</Text>
-          <Text style={styles.subtitle}>Book your consultation today</Text>
-        </View>
-
-        {/* Search Bar */}
-        <Card style={styles.searchSection}>
-          <View style={styles.searchBar}>
-            <Ionicons name="search-outline" size={20} color={COLORS.GRAY_MEDIUM} />
-            <TextInput
-              style={styles.searchInput}
-              placeholder="Search doctors, symptoms, or conditions"
-              value={searchQuery}
-              onChangeText={setSearchQuery}
-            />
+      <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
+        <View style={styles.content}>
+          {/* Header */}
+          <View style={styles.header}>
+            <Text style={styles.title}>Consultations</Text>
+            <Text style={styles.subtitle}>
+              Book appointments and connect with healthcare providers
+            </Text>
           </View>
-          
-          {/* Specializations */}
-          <Text style={styles.filterTitle}>Filter by Specialization</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.specializationList}>
-            <SpecializationChip
-              specialization="All"
-              isSelected={selectedSpecialization === ''}
-              onPress={() => setSelectedSpecialization('')}
-            />
-            {MEDICAL_SPECIALIZATIONS.slice(0, 8).map((spec) => (
-              <SpecializationChip
-                key={spec}
-                specialization={spec}
-                isSelected={selectedSpecialization === spec}
-                onPress={() => setSelectedSpecialization(spec)}
-              />
-            ))}
-          </ScrollView>
-          
-          <Button
-            title="Find Doctors"
-            onPress={handleBookNewAppointment}
-            style={styles.searchButton}
-          />
-        </Card>
 
-        {/* Quick Actions */}
-        <Card style={styles.quickActions}>
-          <Text style={styles.sectionTitle}>Quick Actions</Text>
-          <View style={styles.actionGrid}>
-            <TouchableOpacity
-              style={styles.actionItem}
-              onPress={() => navigation.navigate('DoctorList')}
-            >
-              <View style={[styles.actionIcon, { backgroundColor: COLORS.PRIMARY }]}>
-                <Ionicons name="people-outline" size={24} color={COLORS.WHITE} />
-              </View>
-              <Text style={styles.actionText}>Browse Doctors</Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity
-              style={styles.actionItem}
-              onPress={() => navigation.navigate('DoctorList', { urgent: true })}
-            >
-              <View style={[styles.actionIcon, { backgroundColor: COLORS.EMERGENCY }]}>
-                <Ionicons name="flash-outline" size={24} color={COLORS.WHITE} />
-              </View>
-              <Text style={styles.actionText}>Urgent Care</Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity
-              style={styles.actionItem}
-              onPress={() => navigation.navigate('DoctorList', { type: 'video' })}
-            >
-              <View style={[styles.actionIcon, { backgroundColor: COLORS.SUCCESS }]}>
-                <Ionicons name="videocam-outline" size={24} color={COLORS.WHITE} />
-              </View>
-              <Text style={styles.actionText}>Video Consultation</Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity
-              style={styles.actionItem}
-              onPress={() => navigation.navigate('Chat')}
-            >
-              <View style={[styles.actionIcon, { backgroundColor: COLORS.INFO }]}>
-                <Ionicons name="chatbubble-outline" size={24} color={COLORS.WHITE} />
-              </View>
-              <Text style={styles.actionText}>Chat Support</Text>
-            </TouchableOpacity>
+          {/* Consultation Options */}
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Consultation Options</Text>
+            <View style={styles.optionsGrid}>
+              {consultationOptions.map(renderConsultationOption)}
+            </View>
           </View>
-        </Card>
 
-        {/* Upcoming Appointments */}
-        <Card style={styles.appointmentsSection}>
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Upcoming Appointments</Text>
-            {upcomingAppointments.length > 0 && (
-              <TouchableOpacity>
-                <Text style={styles.viewAllText}>View All</Text>
+          {/* Upcoming Appointments */}
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>Upcoming Appointments</Text>
+              <TouchableOpacity onPress={() => navigation.navigate('PatientAppointments')}>
+                <Text style={styles.seeAllText}>See All</Text>
               </TouchableOpacity>
+            </View>
+            
+            {upcomingAppointments.length > 0 ? (
+              upcomingAppointments.slice(0, 3).map((appointment) => (
+                <AppointmentCard key={appointment.id} appointment={appointment} />
+              ))
+            ) : (
+              <Card style={styles.appointmentCard}>
+                <View style={styles.appointmentHeader}>
+                  <Text style={styles.appointmentTitle}>No Upcoming Appointments</Text>
+                </View>
+                <Text style={styles.appointmentSubtitle}>
+                  You don't have any upcoming appointments. Book one now to get started.
+                </Text>
+                <TouchableOpacity
+                  style={styles.bookButton}
+                  onPress={() => navigation.navigate('DoctorList')}
+                >
+                  <Text style={styles.bookButtonText}>Book Appointment</Text>
+                </TouchableOpacity>
+              </Card>
             )}
           </View>
-          
-          {loading ? (
-            <View style={styles.loadingContainer}>
-              <ActivityIndicator size="small" color={COLORS.PRIMARY} />
-              <Text style={styles.loadingText}>Loading appointments...</Text>
-            </View>
-          ) : upcomingAppointments.length === 0 ? (
-            <View style={styles.emptyState}>
-              <Ionicons name="calendar-outline" size={48} color={COLORS.GRAY_MEDIUM} />
-              <Text style={styles.emptyTitle}>No Upcoming Appointments</Text>
-              <Text style={styles.emptySubtitle}>Book your first consultation with our healthcare professionals</Text>
-              <Button
-                title="Book Appointment"
-                onPress={handleBookNewAppointment}
-                style={styles.bookButton}
-              />
-            </View>
-          ) : (
-            upcomingAppointments.map((appointment) => (
-              <AppointmentCard key={appointment.id} appointment={appointment} />
-            ))
-          )}
-        </Card>
+
+          {/* Health Tips */}
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Health Tips</Text>
+            <Card variant="primary" style={styles.healthTipCard}>
+              <View style={styles.healthTipContent}>
+                <Ionicons name="bulb" size={24} color={COLORS.PRIMARY} />
+                <View style={styles.healthTipText}>
+                  <Text style={styles.healthTipTitle}>Preparing for Your Consultation</Text>
+                  <Text style={styles.healthTipDescription}>
+                    Before your appointment, write down any symptoms you're experiencing, 
+                    list all medications you're taking, and prepare questions for your doctor.
+                  </Text>
+                </View>
+              </View>
+            </Card>
+          </View>
+        </View>
       </ScrollView>
     </SafeAreaView>
   );
 };
-
-// Mock data for demonstration
-const mockAppointments = [
-  {
-    id: '1',
-    doctorName: 'Dr. Sarah Johnson',
-    specialization: 'General Practitioner',
-    appointmentDate: '2025-09-03',
-    appointmentTime: '10:00 AM',
-    status: CONSULTATION_STATUS.CONFIRMED,
-    type: 'video'
-  },
-  {
-    id: '2',
-    doctorName: 'Dr. Michael Chen',
-    specialization: 'Cardiologist',
-    appointmentDate: '2025-09-05',
-    appointmentTime: '2:30 PM',
-    status: CONSULTATION_STATUS.PENDING,
-    type: 'chat'
-  }
-];
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: COLORS.BACKGROUND,
   },
-  content: {
+  scrollView: {
     flex: 1,
+  },
+  content: {
     padding: SPACING.MD,
   },
   header: {
@@ -384,55 +319,7 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZES.MD,
     color: COLORS.TEXT_SECONDARY,
   },
-  searchSection: {
-    marginBottom: SPACING.MD,
-  },
-  searchBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: COLORS.GRAY_LIGHT,
-    borderRadius: BORDER_RADIUS.MD,
-    paddingHorizontal: SPACING.MD,
-    paddingVertical: SPACING.SM,
-    marginBottom: SPACING.MD,
-  },
-  searchInput: {
-    flex: 1,
-    fontSize: FONT_SIZES.MD,
-    color: COLORS.TEXT_PRIMARY,
-    marginLeft: SPACING.SM,
-  },
-  filterTitle: {
-    fontSize: FONT_SIZES.SM,
-    fontWeight: '600',
-    color: COLORS.TEXT_PRIMARY,
-    marginBottom: SPACING.SM,
-  },
-  specializationList: {
-    marginBottom: SPACING.MD,
-  },
-  specializationChip: {
-    backgroundColor: COLORS.GRAY_LIGHT,
-    paddingHorizontal: SPACING.MD,
-    paddingVertical: SPACING.SM,
-    borderRadius: BORDER_RADIUS.XL,
-    marginRight: SPACING.SM,
-  },
-  selectedChip: {
-    backgroundColor: COLORS.PRIMARY,
-  },
-  chipText: {
-    fontSize: FONT_SIZES.SM,
-    color: COLORS.TEXT_SECONDARY,
-    fontWeight: '500',
-  },
-  selectedChipText: {
-    color: COLORS.WHITE,
-  },
-  searchButton: {
-    marginTop: SPACING.SM,
-  },
-  quickActions: {
+  section: {
     marginBottom: SPACING.MD,
   },
   sectionTitle: {
@@ -441,32 +328,40 @@ const styles = StyleSheet.create({
     color: COLORS.TEXT_PRIMARY,
     marginBottom: SPACING.MD,
   },
-  actionGrid: {
+  optionsGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     justifyContent: 'space-between',
   },
-  actionItem: {
+  optionContainer: {
     width: '48%',
-    alignItems: 'center',
     marginBottom: SPACING.MD,
   },
-  actionIcon: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
+  optionCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: SPACING.MD,
+  },
+  optionIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: SPACING.SM,
   },
-  actionText: {
-    fontSize: FONT_SIZES.SM,
+  optionText: {
+    flex: 1,
+    marginLeft: SPACING.MD,
+  },
+  optionTitle: {
+    fontSize: FONT_SIZES.MD,
+    fontWeight: 'bold',
     color: COLORS.TEXT_PRIMARY,
-    textAlign: 'center',
-    fontWeight: '500',
   },
-  appointmentsSection: {
-    marginBottom: SPACING.XL,
+  optionSubtitle: {
+    fontSize: FONT_SIZES.SM,
+    color: COLORS.TEXT_SECONDARY,
   },
   sectionHeader: {
     flexDirection: 'row',
@@ -474,41 +369,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: SPACING.MD,
   },
-  viewAllText: {
+  seeAllText: {
     fontSize: FONT_SIZES.SM,
     color: COLORS.PRIMARY,
     fontWeight: '600',
-  },
-  loadingContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: SPACING.XL,
-  },
-  loadingText: {
-    marginLeft: SPACING.SM,
-    fontSize: FONT_SIZES.MD,
-    color: COLORS.TEXT_SECONDARY,
-  },
-  emptyState: {
-    alignItems: 'center',
-    paddingVertical: SPACING.XL,
-  },
-  emptyTitle: {
-    fontSize: FONT_SIZES.LG,
-    fontWeight: 'bold',
-    color: COLORS.TEXT_PRIMARY,
-    marginTop: SPACING.MD,
-    marginBottom: SPACING.XS,
-  },
-  emptySubtitle: {
-    fontSize: FONT_SIZES.MD,
-    color: COLORS.TEXT_SECONDARY,
-    textAlign: 'center',
-    marginBottom: SPACING.LG,
-  },
-  bookButton: {
-    paddingHorizontal: SPACING.XL,
   },
   appointmentCard: {
     backgroundColor: COLORS.WHITE,
@@ -521,35 +385,16 @@ const styles = StyleSheet.create({
   appointmentHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: SPACING.MD,
-  },
-  doctorInfo: {
-    flexDirection: 'row',
     alignItems: 'center',
-    flex: 1,
+    marginBottom: SPACING.XS,
   },
-  doctorAvatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: COLORS.PRIMARY,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: SPACING.SM,
-  },
-  doctorDetails: {
-    flex: 1,
-  },
-  doctorName: {
+  appointmentTitle: {
     fontSize: FONT_SIZES.MD,
     fontWeight: 'bold',
     color: COLORS.TEXT_PRIMARY,
-    marginBottom: SPACING.XS / 2,
   },
-  doctorSpecialization: {
-    fontSize: FONT_SIZES.SM,
-    color: COLORS.TEXT_SECONDARY,
+  appointmentStatus: {
+    alignItems: 'flex-end',
   },
   statusBadge: {
     paddingHorizontal: SPACING.SM,
@@ -560,20 +405,75 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZES.XS,
     color: COLORS.WHITE,
     fontWeight: '600',
-    textTransform: 'uppercase',
   },
-  appointmentDetails: {
+  appointmentSubtitle: {
+    fontSize: FONT_SIZES.SM,
+    color: COLORS.TEXT_SECONDARY,
+    marginBottom: SPACING.XS,
+  },
+  appointmentDate: {
+    fontSize: FONT_SIZES.SM,
+    color: COLORS.PRIMARY,
+    fontWeight: '600',
+    marginBottom: SPACING.MD,
+  },
+  appointmentActions: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    justifyContent: 'flex-end',
   },
-  detailItem: {
+  joinButton: {
+    backgroundColor: COLORS.SUCCESS,
+    borderRadius: BORDER_RADIUS.MD,
+    paddingHorizontal: SPACING.MD,
+    paddingVertical: SPACING.SM,
+    marginRight: SPACING.SM,
+  },
+  joinButtonText: {
+    fontSize: FONT_SIZES.SM,
+    color: COLORS.WHITE,
+    fontWeight: '600',
+  },
+  detailsButton: {
+    backgroundColor: COLORS.GRAY_LIGHT,
+    borderRadius: BORDER_RADIUS.MD,
+    paddingHorizontal: SPACING.MD,
+    paddingVertical: SPACING.SM,
+  },
+  detailsButtonText: {
+    fontSize: FONT_SIZES.SM,
+    color: COLORS.TEXT_PRIMARY,
+    fontWeight: '600',
+  },
+  bookButton: {
+    backgroundColor: COLORS.PRIMARY,
+    borderRadius: BORDER_RADIUS.MD,
+    paddingVertical: SPACING.SM,
+    alignItems: 'center',
+  },
+  bookButtonText: {
+    fontSize: FONT_SIZES.SM,
+    color: COLORS.WHITE,
+    fontWeight: '600',
+  },
+  healthTipCard: {
+    padding: SPACING.MD,
+  },
+  healthTipContent: {
     flexDirection: 'row',
     alignItems: 'center',
   },
-  detailText: {
+  healthTipText: {
+    marginLeft: SPACING.MD,
+  },
+  healthTipTitle: {
+    fontSize: FONT_SIZES.MD,
+    fontWeight: 'bold',
+    color: COLORS.TEXT_PRIMARY,
+    marginBottom: SPACING.XS,
+  },
+  healthTipDescription: {
     fontSize: FONT_SIZES.SM,
     color: COLORS.TEXT_SECONDARY,
-    marginLeft: SPACING.XS,
   },
 });
 

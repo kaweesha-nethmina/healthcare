@@ -12,10 +12,19 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../context/AuthContext';
 import {
+  collection,
+  query,
+  where,
+  getDocs,
+  onSnapshot
+} from 'firebase/firestore';
+import { db } from '../../services/firebase';
+import {
   COLORS,
   FONT_SIZES,
   SPACING,
-  BORDER_RADIUS
+  BORDER_RADIUS,
+  EMERGENCY_STATUS
 } from '../../constants';
 import Card from '../../components/Card';
 import Button from '../../components/Button';
@@ -33,17 +42,223 @@ const EmergencyDashboardScreen = ({ navigation }) => {
   useEffect(() => {
     loadDashboardData();
     // Set up real-time updates
-    const interval = setInterval(loadDashboardData, 30000); // Refresh every 30 seconds
-    return () => clearInterval(interval);
+    const unsubscribeEmergencies = setupEmergenciesListener();
+    
+    // Cleanup listeners on unmount
+    return () => {
+      if (unsubscribeEmergencies) unsubscribeEmergencies();
+    };
   }, []);
+
+  const setupEmergenciesListener = () => {
+    try {
+      // Listen for emergencies
+      const emergenciesQuery = query(collection(db, 'emergencies'));
+      
+      return onSnapshot(emergenciesQuery, (snapshot) => {
+        const emergenciesData = [];
+        snapshot.forEach((doc) => {
+          const data = doc.data();
+          // Handle timestamp conversion properly
+          const timestamp = data.timestamp ? 
+            (typeof data.timestamp.toDate === 'function' ? data.timestamp.toDate() : data.timestamp) : 
+            new Date();
+          
+          emergenciesData.push({
+            id: doc.id,
+            ...data,
+            timestamp,
+            // Format time ago for display
+            timeAgo: formatTimeAgo(timestamp)
+          });
+        });
+        
+        // Sort in memory instead of using Firestore orderBy
+        emergenciesData.sort((a, b) => {
+          const dateA = a.timestamp || new Date(0);
+          const dateB = b.timestamp || new Date(0);
+          return dateB - dateA; // Descending order (newest first)
+        });
+        
+        // Get active emergencies (pending and in progress)
+        const activeEmergencies = emergenciesData.filter(emergency => 
+          [EMERGENCY_STATUS.PENDING, EMERGENCY_STATUS.IN_PROGRESS].includes(emergency.status)
+        );
+        
+        setDashboardData(prev => ({
+          ...prev,
+          activeEmergencies: activeEmergencies.slice(0, 5) // Show only first 5 emergencies
+        }));
+        
+        // Update statistics
+        updateStatistics(emergenciesData);
+      }, (error) => {
+        console.error('Error listening to emergencies:', error);
+      });
+    } catch (error) {
+      console.error('Error setting up emergencies listener:', error);
+      return null;
+    }
+  };
+
+  const formatTimeAgo = (timestamp) => {
+    if (!timestamp) return 'Just now';
+    
+    const now = new Date();
+    const diffMs = now - timestamp;
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMins / 60);
+    const diffDays = Math.floor(diffHours / 24);
+    
+    if (diffMins < 1) return 'Just now';
+    if (diffMins < 60) return `${diffMins} minutes ago`;
+    if (diffHours < 24) return `${diffHours} hours ago`;
+    return `${diffDays} days ago`;
+  };
+
+  const updateStatistics = (emergenciesData) => {
+    try {
+      // Calculate statistics
+      const activeEmergencies = emergenciesData.filter(emergency => 
+        [EMERGENCY_STATUS.PENDING, EMERGENCY_STATUS.IN_PROGRESS].includes(emergency.status)
+      );
+      
+      // Get dispatched units (in progress emergencies)
+      const dispatchedUnits = emergenciesData.filter(emergency => 
+        emergency.status === EMERGENCY_STATUS.IN_PROGRESS
+      ).length;
+      
+      // Calculate average response time
+      const completedEmergencies = emergenciesData.filter(emergency => 
+        emergency.status === EMERGENCY_STATUS.COMPLETED && emergency.timestamp
+      );
+      
+      let avgResponseTime = 0;
+      if (completedEmergencies.length > 0) {
+        const totalResponseTime = completedEmergencies.reduce((sum, emergency) => {
+          // Calculate time from emergency creation to completion
+          const creationTime = emergency.timestamp ? new Date(emergency.timestamp) : new Date();
+          const completionTime = emergency.resolvedAt ? 
+            (typeof emergency.resolvedAt.toDate === 'function' ? emergency.resolvedAt.toDate() : emergency.resolvedAt) : 
+            new Date();
+          
+          const responseTime = (completionTime - creationTime) / 60000; // Convert to minutes
+          return sum + responseTime;
+        }, 0);
+        
+        avgResponseTime = Math.round(totalResponseTime / completedEmergencies.length);
+      }
+      
+      const statistics = {
+        activeEmergencies: activeEmergencies.length,
+        dispatchedUnits: dispatchedUnits,
+        avgResponseTime: avgResponseTime,
+        totalCalls: emergenciesData.length
+      };
+      
+      setDashboardData(prev => ({
+        ...prev,
+        statistics: statistics
+      }));
+    } catch (error) {
+      console.error('Error updating statistics:', error);
+    }
+  };
 
   const loadDashboardData = async () => {
     try {
-      // In a real app, fetch from Firebase real-time
-      setDashboardData(mockEmergencyData);
+      // Load emergencies
+      const emergenciesQuery = query(collection(db, 'emergencies'));
+      
+      const emergenciesSnapshot = await getDocs(emergenciesQuery);
+      const emergenciesData = [];
+      emergenciesSnapshot.forEach((doc) => {
+        const data = doc.data();
+        // Handle timestamp conversion properly
+        const timestamp = data.timestamp ? 
+          (typeof data.timestamp.toDate === 'function' ? data.timestamp.toDate() : data.timestamp) : 
+          new Date();
+        
+        emergenciesData.push({
+          id: doc.id,
+          ...data,
+          timestamp,
+          // Format time ago for display
+          timeAgo: formatTimeAgo(timestamp)
+        });
+      });
+      
+      // Sort in memory instead of using Firestore orderBy
+      emergenciesData.sort((a, b) => {
+        const dateA = a.timestamp || new Date(0);
+        const dateB = b.timestamp || new Date(0);
+        return dateB - dateA; // Descending order (newest first)
+      });
+      
+      // Get active emergencies (pending and in progress)
+      const activeEmergencies = emergenciesData.filter(emergency => 
+        [EMERGENCY_STATUS.PENDING, EMERGENCY_STATUS.IN_PROGRESS].includes(emergency.status)
+      );
+      
+      // Get pending dispatches (pending emergencies)
+      const pendingDispatches = emergenciesData.filter(emergency => 
+        emergency.status === EMERGENCY_STATUS.PENDING
+      );
+      
+      // Calculate statistics
+      const dispatchedUnits = emergenciesData.filter(emergency => 
+        emergency.status === EMERGENCY_STATUS.IN_PROGRESS
+      ).length;
+      
+      // Calculate average response time
+      const completedEmergencies = emergenciesData.filter(emergency => 
+        emergency.status === EMERGENCY_STATUS.COMPLETED && emergency.timestamp
+      );
+      
+      let avgResponseTime = 0;
+      if (completedEmergencies.length > 0) {
+        const totalResponseTime = completedEmergencies.reduce((sum, emergency) => {
+          // Calculate time from emergency creation to completion
+          const creationTime = emergency.timestamp ? new Date(emergency.timestamp) : new Date();
+          const completionTime = emergency.resolvedAt ? 
+            (typeof emergency.resolvedAt.toDate === 'function' ? emergency.resolvedAt.toDate() : emergency.resolvedAt) : 
+            new Date();
+          
+          const responseTime = (completionTime - creationTime) / 60000; // Convert to minutes
+          return sum + responseTime;
+        }, 0);
+        
+        avgResponseTime = Math.round(totalResponseTime / completedEmergencies.length);
+      }
+      
+      const statistics = {
+        activeEmergencies: activeEmergencies.length,
+        dispatchedUnits: dispatchedUnits,
+        avgResponseTime: avgResponseTime,
+        totalCalls: emergenciesData.length
+      };
+      
+      // For alerts, we'll use a simple static array for now
+      // In a real app, this could come from a separate alerts collection
+      const alerts = [
+        {
+          id: 'alert1',
+          title: 'System Status',
+          message: 'All systems operational',
+          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          icon: 'checkmark-circle',
+          color: COLORS.SUCCESS
+        }
+      ];
+      
+      setDashboardData({
+        activeEmergencies: activeEmergencies.slice(0, 5), // Show only first 5 emergencies
+        pendingDispatches: pendingDispatches,
+        statistics: statistics,
+        alerts: alerts
+      });
     } catch (error) {
       console.error('Error loading emergency dashboard:', error);
-      setDashboardData(mockEmergencyData);
     }
   };
 
@@ -291,65 +506,7 @@ const EmergencyDashboardScreen = ({ navigation }) => {
   );
 };
 
-// Mock emergency data
-const mockEmergencyData = {
-  activeEmergencies: [
-    {
-      id: 'EMG001',
-      patientName: 'John Doe',
-      type: 'Medical Emergency',
-      priority: 'critical',
-      location: '123 Main St, Downtown',
-      description: 'Chest pain, difficulty breathing. Patient conscious.',
-      timeAgo: '3 minutes ago',
-      coordinates: { lat: 40.7128, lng: -74.0060 }
-    },
-    {
-      id: 'EMG002',
-      patientName: 'Sarah Wilson',
-      type: 'Accident',
-      priority: 'high',
-      location: 'Highway 101, Mile 15',
-      description: 'Vehicle collision, multiple injuries reported.',
-      timeAgo: '8 minutes ago',
-      coordinates: { lat: 40.7580, lng: -73.9855 }
-    },
-    {
-      id: 'EMG003',
-      patientName: 'Mike Johnson',
-      type: 'Fire Emergency',
-      priority: 'critical',
-      location: '456 Oak Avenue',
-      description: 'House fire, person trapped inside.',
-      timeAgo: '12 minutes ago',
-      coordinates: { lat: 40.7589, lng: -73.9851 }
-    }
-  ],
-  statistics: {
-    activeEmergencies: 3,
-    dispatchedUnits: 8,
-    avgResponseTime: 7.2,
-    totalCalls: 24
-  },
-  alerts: [
-    {
-      id: 'alert1',
-      title: 'System Maintenance',
-      message: 'Scheduled maintenance in 2 hours',
-      time: '10:30 AM',
-      icon: 'settings',
-      color: COLORS.INFO
-    },
-    {
-      id: 'alert2',
-      title: 'High Call Volume',
-      message: 'Increased emergency calls in downtown area',
-      time: '10:15 AM',
-      icon: 'trending-up',
-      color: COLORS.WARNING
-    }
-  ]
-};
+
 
 const styles = StyleSheet.create({
   container: {

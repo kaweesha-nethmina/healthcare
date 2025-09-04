@@ -32,12 +32,30 @@ const MedicalHistoryScreen = ({ navigation }) => {
 
   const loadMedicalHistory = async () => {
     try {
-      // In a real app, fetch from Firebase
-      // For now, using mock data
-      setMedicalHistory(mockMedicalHistory);
+      // Fetch medical history from Firebase
+      if (user && user.uid) {
+        // Removed orderBy to avoid composite index requirement
+        const medicalHistoryQuery = query(
+          collection(db, 'users', user.uid, 'medicalHistory')
+          // Removed orderBy('date', 'desc') to avoid composite index
+        );
+        
+        const medicalHistorySnapshot = await getDocs(medicalHistoryQuery);
+        const medicalHistoryData = [];
+        medicalHistorySnapshot.forEach((doc) => {
+          medicalHistoryData.push({
+            id: doc.id,
+            ...doc.data()
+          });
+        });
+        
+        // Sort in memory instead of using Firestore orderBy
+        medicalHistoryData.sort((a, b) => new Date(b.date) - new Date(a.date));
+        
+        setMedicalHistory(medicalHistoryData);
+      }
     } catch (error) {
       console.error('Error loading medical history:', error);
-      setMedicalHistory(mockMedicalHistory);
     }
   };
 
@@ -282,70 +300,6 @@ const MedicalHistoryScreen = ({ navigation }) => {
     </SafeAreaView>
   );
 };
-
-// Mock medical history data
-const mockMedicalHistory = [
-  {
-    id: '1',
-    type: 'appointment',
-    title: 'Annual Checkup',
-    date: '2024-03-15',
-    doctor: 'Dr. Sarah Johnson',
-    summary: 'Routine annual physical examination. All vitals normal, no concerns identified.',
-    details: 'Blood pressure: 120/80, Heart rate: 72 bpm, Weight: 70kg, Height: 175cm. Recommended to continue current exercise routine and diet.',
-    critical: false
-  },
-  {
-    id: '2',
-    type: 'lab-result',
-    title: 'Blood Test Results',
-    date: '2024-03-10',
-    doctor: 'Dr. Michael Chen',
-    summary: 'Complete blood count and metabolic panel. Results within normal ranges.',
-    details: 'Hemoglobin: 14.2 g/dL, White Blood Cells: 7,200/μL, Glucose: 95 mg/dL, Cholesterol: 180 mg/dL',
-    critical: false
-  },
-  {
-    id: '3',
-    type: 'prescription',
-    title: 'Blood Pressure Medication',
-    date: '2024-02-28',
-    doctor: 'Dr. Sarah Johnson',
-    summary: 'Lisinopril 10mg prescribed for mild hypertension management.',
-    details: 'Take once daily in the morning. Monitor blood pressure regularly. Next follow-up in 3 months.',
-    critical: false
-  },
-  {
-    id: '4',
-    type: 'diagnosis',
-    title: 'Mild Hypertension',
-    date: '2024-02-28',
-    doctor: 'Dr. Sarah Johnson',
-    summary: 'Diagnosed with stage 1 hypertension. Treatment plan initiated.',
-    details: 'Blood pressure readings consistently above 140/90. Lifestyle modifications recommended along with medication.',
-    critical: true
-  },
-  {
-    id: '5',
-    type: 'vaccination',
-    title: 'Annual Flu Shot',
-    date: '2024-01-15',
-    doctor: 'Nurse Patricia Wilson',
-    summary: 'Seasonal influenza vaccine administered.',
-    details: 'Quadrivalent influenza vaccine. No adverse reactions reported. Next dose due in 12 months.',
-    critical: false
-  },
-  {
-    id: '6',
-    type: 'appointment',
-    title: 'Cardiology Consultation',
-    date: '2024-01-20',
-    doctor: 'Dr. Michael Chen',
-    summary: 'Specialist consultation for elevated blood pressure readings.',
-    details: 'EKG normal, echocardiogram showed normal heart function. Recommended lifestyle changes and medication.',
-    critical: false
-  }
-];
 
 const styles = StyleSheet.create({
   container: {

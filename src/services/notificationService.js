@@ -11,10 +11,12 @@ import {
   limit,
   onSnapshot,
   serverTimestamp,
-  writeBatch
+  writeBatch,
+  getDoc
 } from 'firebase/firestore';
 import { db } from './firebase';
 import { NOTIFICATION_TYPES } from '../constants';
+import PushNotificationService from './pushNotificationService';
 
 /**
  * Notification Service for Firebase Firestore
@@ -47,6 +49,9 @@ export class NotificationService {
       const docRef = await addDoc(collection(db, 'notifications'), notification);
       console.log('Notification created with ID:', docRef.id);
       
+      // Send push notification if user has a push token
+      await this.sendPushNotification(userId, notificationData.title, notificationData.message, notificationData.data);
+      
       return {
         id: docRef.id,
         ...notification,
@@ -55,6 +60,201 @@ export class NotificationService {
     } catch (error) {
       console.error('Error creating notification:', error);
       throw error;
+    }
+  }
+
+  /**
+   * Send push notification to a user
+   * @param {string} userId - Target user ID
+   * @param {string} title - Notification title
+   * @param {string} body - Notification body
+   * @param {Object} data - Additional data
+   */
+  static async sendPushNotification(userId, title, body, data = {}) {
+    try {
+      // Get user's push token from their profile
+      const userDocRef = doc(db, 'users', userId);
+      const userDoc = await getDoc(userDocRef);
+      
+      if (userDoc.exists() && userDoc.data().pushToken) {
+        const pushToken = userDoc.data().pushToken;
+        console.log('Sending push notification to user:', userId);
+        return await PushNotificationService.sendPushNotification(pushToken, title, body, data);
+      } else {
+        console.log('User does not have a push token, skipping push notification');
+        return false;
+      }
+    } catch (error) {
+      console.error('Error sending push notification:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Create appointment-related notifications
+   */
+  static async createAppointmentNotification(userId, appointmentData, type = 'created') {
+    const notificationData = {
+      title: this.getAppointmentNotificationTitle(type),
+      message: this.getAppointmentNotificationMessage(type, appointmentData),
+      type: NOTIFICATION_TYPES.APPOINTMENT,
+      category: 'appointment',
+      priority: type === 'cancelled' ? 'high' : 'normal',
+      data: {
+        appointmentId: appointmentData.id,
+        doctorName: appointmentData.doctorName,
+        appointmentDate: appointmentData.appointmentDate,
+        appointmentTime: appointmentData.appointmentTime,
+        type: type
+      },
+      actionUrl: `/consultation/${appointmentData.id}`
+    };
+
+    return this.createNotification(userId, notificationData);
+  }
+
+  /**
+   * Create emergency notifications
+   */
+  static async createEmergencyNotification(userId, emergencyData) {
+    const notificationData = {
+      title: 'Emergency Alert',
+      message: emergencyData.message || 'Emergency assistance has been requested',
+      type: NOTIFICATION_TYPES.EMERGENCY,
+      category: 'emergency',
+      priority: 'urgent',
+      data: {
+        emergencyId: emergencyData.id,
+        location: emergencyData.location,
+        timestamp: emergencyData.timestamp
+      },
+      actionUrl: `/emergency/${emergencyData.id}`
+    };
+
+    return this.createNotification(userId, notificationData);
+  }
+
+  /**
+   * Create prescription reminder notifications
+   */
+  static async createPrescriptionReminderNotification(userId, prescriptionData) {
+    const notificationData = {
+      title: 'Medication Reminder',
+      message: `Time to take ${prescriptionData.medication} (${prescriptionData.dosage})`,
+      type: NOTIFICATION_TYPES.REMINDER,
+      category: 'medication',
+      priority: 'normal',
+      data: {
+        prescriptionId: prescriptionData.id,
+        medication: prescriptionData.medication,
+        dosage: prescriptionData.dosage,
+        frequency: prescriptionData.frequency,
+        time: prescriptionData.time
+      },
+      actionUrl: `/prescription/${prescriptionData.id}`
+    };
+
+    return this.createNotification(userId, notificationData);
+  }
+
+  /**
+   * Create chat message notifications
+   */
+  static async createChatMessageNotification(userId, messageData) {
+    // Prepare notification data with conditional fields
+    const notificationData = {
+      title: 'New Message',
+      message: `${messageData.senderName}: ${messageData.text.substring(0, 50)}${messageData.text.length > 50 ? '...' : ''}`,
+      type: NOTIFICATION_TYPES.CONSULTATION,
+      category: 'chat',
+      priority: 'normal',
+      data: {
+        type: 'chat_message',
+        messageId: messageData.id,
+        senderId: messageData.senderId,
+        senderName: messageData.senderName,
+        doctorId: messageData.doctorId,
+        patientId: messageData.patientId,
+        doctorName: messageData.doctorName,
+        patientName: messageData.patientName
+      }
+    };
+
+    // Only include appointmentId if it exists (for appointment-based chats)
+    if (messageData.appointmentId) {
+      notificationData.data.appointmentId = messageData.appointmentId;
+      notificationData.actionUrl = `/chat/${messageData.appointmentId}`;
+    } 
+    // For direct messaging, use chatId if available
+    else if (messageData.chatId) {
+      notificationData.data.chatId = messageData.chatId;
+      notificationData.actionUrl = `/chat/direct/${messageData.chatId}`;
+    }
+
+    return this.createNotification(userId, notificationData);
+  }
+
+  /**
+   * Schedule appointment reminder
+   */
+  static async scheduleAppointmentReminder(userId, appointmentData) {
+    try {
+      // Get user's push token
+      const userDocRef = doc(db, 'users', userId);
+      const userDoc = await getDoc(userDocRef);
+      
+      if (userDoc.exists() && userDoc.data().pushToken) {
+        const pushToken = userDoc.data().pushToken;
+        
+        // Schedule push notification 1 hour before appointment
+        const appointmentTime = new Date(appointmentData.appointmentDate + 'T' + appointmentData.appointmentTime);
+        const reminderTime = new Date(appointmentTime.getTime() - 60 * 60 * 1000); // 1 hour before
+        
+        await PushNotificationService.scheduleAppointmentReminder({
+          id: appointmentData.id,
+          date: reminderTime,
+          doctorName: appointmentData.doctorName
+        });
+        
+        console.log('Appointment reminder scheduled for user:', userId);
+        return true;
+      }
+      
+      return false;
+    } catch (error) {
+      console.error('Error scheduling appointment reminder:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Schedule prescription reminder
+   */
+  static async schedulePrescriptionReminder(userId, prescriptionData) {
+    try {
+      // Get user's push token
+      const userDocRef = doc(db, 'users', userId);
+      const userDoc = await getDoc(userDocRef);
+      
+      if (userDoc.exists() && userDoc.data().pushToken) {
+        const pushToken = userDoc.data().pushToken;
+        
+        // Schedule daily medication reminder
+        await PushNotificationService.scheduleMedicationReminder({
+          id: prescriptionData.id,
+          name: prescriptionData.medication,
+          dosage: prescriptionData.dosage,
+          time: prescriptionData.time
+        });
+        
+        console.log('Prescription reminder scheduled for user:', userId);
+        return true;
+      }
+      
+      return false;
+    } catch (error) {
+      console.error('Error scheduling prescription reminder:', error);
+      return false;
     }
   }
 
@@ -98,10 +298,13 @@ export class NotificationService {
       const notifications = [];
 
       snapshot.forEach((doc) => {
+        const data = doc.data();
         notifications.push({
           id: doc.id,
-          ...doc.data(),
-          timestamp: doc.data().timestamp?.toDate() || new Date()
+          ...data,
+          timestamp: data.timestamp ? 
+            (typeof data.timestamp.toDate === 'function' ? data.timestamp.toDate() : data.timestamp) : 
+            new Date()
         });
       });
 
@@ -260,10 +463,13 @@ export class NotificationService {
       const unsubscribe = onSnapshot(q, (snapshot) => {
         const notifications = [];
         snapshot.forEach((doc) => {
+          const data = doc.data();
           notifications.push({
             id: doc.id,
-            ...doc.data(),
-            timestamp: doc.data().timestamp?.toDate() || new Date()
+            ...data,
+            timestamp: data.timestamp ? 
+              (typeof data.timestamp.toDate === 'function' ? data.timestamp.toDate() : data.timestamp) : 
+              new Date()
           });
         });
 
@@ -286,43 +492,41 @@ export class NotificationService {
   }
 
   /**
-   * Create appointment-related notifications
+   * Subscribe to real-time appointment status updates
+   * @param {string} appointmentId - Appointment ID
+   * @param {Function} callback - Callback function for updates
    */
-  static async createAppointmentNotification(userId, appointmentData, type = 'created') {
-    const notificationData = {
-      title: this.getAppointmentNotificationTitle(type),
-      message: this.getAppointmentNotificationMessage(type, appointmentData),
-      type: NOTIFICATION_TYPES.APPOINTMENT,
-      category: 'appointment',
-      priority: type === 'cancelled' ? 'high' : 'normal',
-      data: {
-        appointmentId: appointmentData.id,
-        doctorName: appointmentData.doctorName,
-        appointmentDate: appointmentData.appointmentDate,
-        appointmentTime: appointmentData.appointmentTime,
-        type: type
-      },
-      actionUrl: `/consultation/${appointmentData.id}`
-    };
+  static subscribeToAppointmentStatus(appointmentId, callback) {
+    try {
+      const appointmentRef = doc(db, 'appointments', appointmentId);
+      
+      const unsubscribe = onSnapshot(appointmentRef, (doc) => {
+        if (doc.exists()) {
+          const data = doc.data();
+          const appointmentData = {
+            id: doc.id,
+            ...data,
+            createdAt: data.createdAt ? 
+              (typeof data.createdAt.toDate === 'function' ? data.createdAt.toDate() : data.createdAt) : 
+              new Date(),
+            updatedAt: data.updatedAt ? 
+              (typeof data.updatedAt.toDate === 'function' ? data.updatedAt.toDate() : data.updatedAt) : 
+              new Date()
+          };
+          callback(appointmentData);
+        } else {
+          callback(null);
+        }
+      }, (error) => {
+        console.error('Error in appointment status subscription:', error);
+        callback(null);
+      });
 
-    return this.createNotification(userId, notificationData);
-  }
-
-  /**
-   * Create emergency notifications
-   */
-  static async createEmergencyNotification(userId, emergencyData) {
-    const notificationData = {
-      title: 'Emergency Alert',
-      message: emergencyData.message || 'Emergency assistance has been requested',
-      type: NOTIFICATION_TYPES.EMERGENCY,
-      category: 'emergency',
-      priority: 'urgent',
-      data: emergencyData,
-      actionUrl: `/emergency/${emergencyData.id}`
-    };
-
-    return this.createNotification(userId, notificationData);
+      return unsubscribe;
+    } catch (error) {
+      console.error('Error subscribing to appointment status:', error);
+      return () => {}; // Return dummy unsubscribe function
+    }
   }
 
   /**

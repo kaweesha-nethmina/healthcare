@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
+import * as Notifications from 'expo-notifications';
 import { useAuth } from '../context/AuthContext';
 import { USER_ROLES } from '../constants';
 
@@ -19,12 +20,44 @@ const Stack = createStackNavigator();
 const AppNavigator = () => {
   const { user, userProfile, loading, error } = useAuth();
   const [retryCount, setRetryCount] = useState(0);
+  const [notificationListener, setNotificationListener] = useState(null);
 
   const handleRetry = () => {
     setRetryCount(prev => prev + 1);
     // Force re-render to retry Firebase initialization
     window.location?.reload?.() || require('react-native').DevSettings?.reload?.();
   };
+
+  // Handle notification response (when user taps on notification)
+  useEffect(() => {
+    const listener = Notifications.addNotificationResponseReceivedListener(response => {
+      console.log('Notification response received:', response);
+      const notification = response.notification;
+      const data = notification.request.content.data;
+      
+      // Handle chat notifications
+      if (data && data.type === 'chat_message') {
+        // Extract chat parameters
+        const { doctorId, patientId, doctorName, patientName } = data;
+        
+        // Validate required parameters
+        if (doctorId && patientId) {
+          // Navigate to chat screen
+          // Note: This is a simplified approach. In a real app, you would need to
+          // access the navigation container ref to navigate programmatically
+          console.log('Would navigate to chat with:', { doctorId, patientId, doctorName, patientName });
+        }
+      }
+    });
+
+    setNotificationListener(listener);
+
+    return () => {
+      if (notificationListener) {
+        notificationListener.remove();
+      }
+    };
+  }, []);
 
   if (loading) {
     return <LoadingScreen />;

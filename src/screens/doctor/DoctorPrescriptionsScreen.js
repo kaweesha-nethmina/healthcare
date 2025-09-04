@@ -42,16 +42,50 @@ const DoctorPrescriptionsScreen = ({ navigation, route }) => {
 
   const loadPrescriptions = async () => {
     try {
-      // In a real app, fetch from Firebase
-      // For now, using mock data
-      let mockData = mockPrescriptions;
-      if (patientId) {
-        mockData = mockData.filter(p => p.patientId === patientId);
+      // Fetch prescriptions from Firebase
+      let prescriptionsQuery = collection(db, 'prescriptions');
+      
+      // Filter by doctor if available
+      if (userProfile?.uid) {
+        prescriptionsQuery = query(
+          prescriptionsQuery,
+          where('doctorId', '==', userProfile.uid)
+        );
       }
-      setPrescriptions(mockData);
+      
+      // Filter by patient if specified
+      if (patientId) {
+        prescriptionsQuery = query(
+          prescriptionsQuery,
+          where('patientId', '==', patientId)
+        );
+      }
+      
+      // Order by creation date
+      prescriptionsQuery = query(
+        prescriptionsQuery,
+      );
+      
+      const prescriptionsSnapshot = await getDocs(prescriptionsQuery);
+      const prescriptionsData = [];
+      
+      prescriptionsSnapshot.forEach((doc) => {
+        prescriptionsData.push({
+          id: doc.id,
+          ...doc.data()
+        });
+      });
+      
+      // Sort in memory instead of using Firestore orderBy
+      prescriptionsData.sort((a, b) => {
+        const dateA = a.createdAt ? (typeof a.createdAt.toDate === 'function' ? a.createdAt.toDate() : a.createdAt) : new Date(0);
+        const dateB = b.createdAt ? (typeof b.createdAt.toDate === 'function' ? b.createdAt.toDate() : b.createdAt) : new Date(0);
+        return new Date(dateB) - new Date(dateA);
+      });
+      
+      setPrescriptions(prescriptionsData);
     } catch (error) {
       console.error('Error loading prescriptions:', error);
-      setPrescriptions(mockPrescriptions);
     }
   };
 
@@ -83,30 +117,53 @@ const DoctorPrescriptionsScreen = ({ navigation, route }) => {
     }
   };
 
-  const createPrescription = (prescriptionData) => {
-    const newPrescription = {
-      id: Date.now().toString(),
-      patientId: patientId || 'patient_1',
-      patientName: patientName || 'Selected Patient',
-      doctorId: userProfile?.id || 'doctor_1',
-      doctorName: `Dr. ${userProfile?.firstName} ${userProfile?.lastName}`,
-      ...prescriptionData,
-      dateIssued: new Date().toISOString(),
-      refillsRemaining: prescriptionData.refills || 0
-    };
+  const createPrescription = async (prescriptionData) => {
+    try {
+      const newPrescription = {
+        patientId: patientId || 'patient_1',
+        patientName: patientName || 'Selected Patient',
+        doctorId: userProfile?.uid || 'doctor_1',
+        doctorName: `Dr. ${userProfile?.firstName} ${userProfile?.lastName}`,
+        ...prescriptionData,
+        createdAt: serverTimestamp(),
+        refillsRemaining: prescriptionData.refills || 0
+      };
 
-    setPrescriptions(prev => [newPrescription, ...prev]);
-    setShowCreateModal(false);
-    Alert.alert('Success', 'Prescription created successfully');
+      // Save to Firebase
+      const docRef = await addDoc(collection(db, 'prescriptions'), newPrescription);
+      
+      // Add to local state
+      const prescriptionWithId = {
+        id: docRef.id,
+        ...newPrescription
+      };
+      
+      setPrescriptions(prev => [prescriptionWithId, ...prev]);
+      setShowCreateModal(false);
+      Alert.alert('Success', 'Prescription created successfully');
+    } catch (error) {
+      console.error('Error creating prescription:', error);
+      Alert.alert('Error', 'Failed to create prescription');
+    }
   };
 
-  const updatePrescription = (updatedData) => {
-    const updated = prescriptions.map(p =>
-      p.id === selectedPrescription.id ? { ...p, ...updatedData } : p
-    );
-    setPrescriptions(updated);
-    setShowEditModal(false);
-    Alert.alert('Success', 'Prescription updated successfully');
+  const updatePrescription = async (updatedData) => {
+    try {
+      // Update in Firebase
+      const prescriptionRef = doc(db, 'prescriptions', selectedPrescription.id);
+      await updateDoc(prescriptionRef, updatedData);
+      
+      // Update local state
+      const updated = prescriptions.map(p =>
+        p.id === selectedPrescription.id ? { ...p, ...updatedData } : p
+      );
+      setPrescriptions(updated);
+      setShowEditModal(false);
+      Alert.alert('Success', 'Prescription updated successfully');
+    } catch (error) {
+      console.error('Error updating prescription:', error);
+      Alert.alert('Error', 'Failed to update prescription');
+    }
   };
 
   const handlePrescriptionAction = (prescription, action) => {
@@ -521,55 +578,6 @@ const DoctorPrescriptionsScreen = ({ navigation, route }) => {
     </SafeAreaView>
   );
 };
-
-// Mock prescriptions data
-const mockPrescriptions = [
-  {
-    id: '1',
-    patientId: 'patient_1',
-    patientName: 'John Smith',
-    doctorId: 'doctor_1',
-    doctorName: 'Dr. Sarah Johnson',
-    medicationName: 'Lisinopril',
-    dosage: '10mg',
-    frequency: 'Once daily',
-    instructions: 'Take with or without food. Monitor blood pressure regularly.',
-    startDate: '2024-02-01',
-    endDate: '2024-05-01',
-    dateIssued: '2024-02-01T10:00:00Z',
-    refillsRemaining: 2
-  },
-  {
-    id: '2',
-    patientId: 'patient_2',
-    patientName: 'Sarah Wilson',
-    doctorId: 'doctor_1',
-    doctorName: 'Dr. Sarah Johnson',
-    medicationName: 'Amoxicillin',
-    dosage: '500mg',
-    frequency: 'Three times daily',
-    instructions: 'Take with food to reduce stomach upset. Complete full course.',
-    startDate: '2024-03-10',
-    endDate: '2024-03-20',
-    dateIssued: '2024-03-10T14:30:00Z',
-    refillsRemaining: 0
-  },
-  {
-    id: '3',
-    patientId: 'patient_3',
-    patientName: 'Mike Johnson',
-    doctorId: 'doctor_1',
-    doctorName: 'Dr. Sarah Johnson',
-    medicationName: 'Metformin',
-    dosage: '500mg',
-    frequency: 'Twice daily',
-    instructions: 'Take with meals. Monitor blood glucose levels.',
-    startDate: '2024-01-15',
-    endDate: '2024-07-15',
-    dateIssued: '2024-01-15T09:00:00Z',
-    refillsRemaining: 3
-  }
-];
 
 const styles = StyleSheet.create({
   container: {

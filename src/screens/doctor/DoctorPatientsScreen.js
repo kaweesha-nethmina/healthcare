@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -13,6 +13,14 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../context/AuthContext';
+import {
+  collection,
+  query,
+  where,
+  onSnapshot,
+  getDocs
+} from 'firebase/firestore';
+import { db } from '../../services/firebase';
 import {
   COLORS,
   FONT_SIZES,
@@ -31,9 +39,16 @@ const DoctorPatientsScreen = ({ navigation }) => {
   const [filterType, setFilterType] = useState('all'); // all, active, inactive, emergency
   const [selectedPatient, setSelectedPatient] = useState(null);
   const [showPatientModal, setShowPatientModal] = useState(false);
+  const patientsListenerRef = useRef(null);
 
   useEffect(() => {
     loadPatients();
+    return () => {
+      // Clean up listener when component unmounts
+      if (patientsListenerRef.current) {
+        patientsListenerRef.current();
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -42,12 +57,70 @@ const DoctorPatientsScreen = ({ navigation }) => {
 
   const loadPatients = async () => {
     try {
-      // In a real app, fetch from Firebase
-      // For now, using mock data
-      setPatients(mockPatients);
+      if (!userProfile?.uid) return;
+      
+      // Get all appointments for this doctor to identify patients
+      const appointmentsQuery = query(
+        collection(db, 'appointments'),
+        where('doctorId', '==', userProfile.uid)
+      );
+      
+      // Set up real-time listener for appointments
+      patientsListenerRef.current = onSnapshot(appointmentsQuery, async (snapshot) => {
+        const patientIds = new Set();
+        snapshot.forEach((doc) => {
+          const appointment = doc.data();
+          if (appointment.patientId) {
+            patientIds.add(appointment.patientId);
+          }
+        });
+        
+        // Fetch patient details for each unique patient ID
+        const patientDataPromises = [];
+        for (const patientId of patientIds) {
+          try {
+            const patientDoc = await getDocs(query(
+              collection(db, 'users'),
+              where('uid', '==', patientId),
+              where('role', '==', 'patient')
+            ));
+            
+            patientDoc.forEach((doc) => {
+              const userData = doc.data();
+              // Create a promise to fetch appointment data for this patient
+              const patientDataPromise = getPatientAppointmentData(patientId).then(appointmentData => ({
+                id: userData.uid,
+                name: `${userData.firstName || ''} ${userData.lastName || ''}`.trim() || 'Unknown Patient',
+                email: userData.email || '',
+                phoneNumber: userData.phone || '',
+                gender: userData.gender || 'Not specified',
+                birthDate: userData.dateOfBirth || '',
+                bloodType: userData.bloodType || 'Unknown',
+                status: 'active', // Default status
+                medicalHistory: userData.medicalHistory || [],
+                allergies: userData.allergies || [],
+                medications: userData.medications || [],
+                totalVisits: appointmentData.totalVisits,
+                lastVisit: appointmentData.lastVisit
+              }));
+              patientDataPromises.push(patientDataPromise);
+            });
+          } catch (error) {
+            console.error('Error fetching patient data:', error);
+          }
+        }
+        
+        // Wait for all patient data to be fetched
+        const patientData = await Promise.all(patientDataPromises);
+        
+        setPatients(patientData);
+      }, (error) => {
+        console.error('Error listening to appointments:', error);
+        setPatients([]);
+      });
     } catch (error) {
       console.error('Error loading patients:', error);
-      setPatients(mockPatients);
+      setPatients([]);
     }
   };
 
@@ -158,9 +231,62 @@ const DoctorPatientsScreen = ({ navigation }) => {
     return age;
   };
 
-  const getUpcomingAppointments = (patientId) => {
-    // In a real app, this would query appointments for this patient
-    return Math.floor(Math.random() * 3); // Mock upcoming appointments count
+  const getUpcomingAppointments = async (patientId) => {
+    try {
+      // Query upcoming appointments for this patient
+      // Removed orderBy to avoid composite index requirement
+      const appointmentsQuery = query(
+        collection(db, 'appointments'),
+        where('patientId', '==', patientId),
+        where('appointmentDate', '>', new Date())
+        // Removed orderBy('appointmentDate', 'asc') to avoid composite index
+      );
+      
+      const appointmentsSnapshot = await getDocs(appointmentsQuery);
+      // Sort in memory instead of using Firestore orderBy
+      const appointmentsData = [];
+      appointmentsSnapshot.forEach((doc) => {
+        appointmentsData.push(doc.data());
+      });
+      appointmentsData.sort((a, b) => new Date(a.appointmentDate) - new Date(b.appointmentDate));
+      return appointmentsData.length;
+    } catch (error) {
+      console.error('Error fetching upcoming appointments:', error);
+      return 0;
+    }
+  };
+
+  const getPatientAppointmentData = async (patientId) => {
+    try {
+      // Query all appointments for this patient
+      // Removed orderBy to avoid composite index requirement
+      const appointmentsQuery = query(
+        collection(db, 'appointments'),
+        where('patientId', '==', patientId)
+        // Removed orderBy('appointmentDate', 'desc') to avoid composite index
+      );
+      
+      const appointmentsSnapshot = await getDocs(appointmentsQuery);
+      // Sort in memory instead of using Firestore orderBy
+      const appointmentsData = [];
+      appointmentsSnapshot.forEach((doc) => {
+        appointmentsData.push(doc.data());
+      });
+      appointmentsData.sort((a, b) => new Date(b.appointmentDate) - new Date(a.appointmentDate));
+      const totalVisits = appointmentsData.length;
+      
+      // Get the last visit date (most recent appointment)
+      let lastVisit = null;
+      if (totalVisits > 0) {
+        const mostRecentAppointment = appointmentsData[0];
+        lastVisit = mostRecentAppointment.appointmentDate;
+      }
+      
+      return { totalVisits, lastVisit };
+    } catch (error) {
+      console.error('Error fetching patient appointment data:', error);
+      return { totalVisits: 0, lastVisit: null };
+    }
   };
 
   const FilterButton = ({ type, title, count, active, onPress }) => (
@@ -168,18 +294,24 @@ const DoctorPatientsScreen = ({ navigation }) => {
       style={[styles.filterButton, active && styles.activeFilterButton]}
       onPress={onPress}
     >
-      <Text style={[
-        styles.filterButtonText,
-        active && styles.activeFilterButtonText
-      ]}>
+      <Text style={[styles.filterButtonText, active && styles.activeFilterButtonText]}>
         {title} {count !== undefined && `(${count})`}
       </Text>
     </TouchableOpacity>
   );
 
   const PatientCard = ({ patient }) => {
-    const upcomingAppointments = getUpcomingAppointments(patient.id);
+    const [upcomingAppointments, setUpcomingAppointments] = useState(0);
     const age = calculateAge(patient.birthDate);
+
+    useEffect(() => {
+      const fetchUpcomingAppointments = async () => {
+        const count = await getUpcomingAppointments(patient.id);
+        setUpcomingAppointments(count);
+      };
+      
+      fetchUpcomingAppointments();
+    }, [patient.id]);
 
     return (
       <Card style={styles.patientCard}>
@@ -476,80 +608,6 @@ const DoctorPatientsScreen = ({ navigation }) => {
     </SafeAreaView>
   );
 };
-
-// Mock patients data
-const mockPatients = [
-  {
-    id: 'patient_1',
-    name: 'John Smith',
-    email: 'john.smith@email.com',
-    phoneNumber: '+1 (555) 123-4567',
-    birthDate: '1985-03-15',
-    gender: 'Male',
-    bloodType: 'O+',
-    status: 'active',
-    totalVisits: 12,
-    lastVisit: '2024-02-28T10:00:00Z',
-    allergies: ['Penicillin', 'Peanuts'],
-    conditions: ['Hypertension']
-  },
-  {
-    id: 'patient_2',
-    name: 'Sarah Wilson',
-    email: 'sarah.wilson@email.com',
-    phoneNumber: '+1 (555) 234-5678',
-    birthDate: '1992-07-22',
-    gender: 'Female',
-    bloodType: 'A+',
-    status: 'active',
-    totalVisits: 8,
-    lastVisit: '2024-03-10T14:30:00Z',
-    allergies: [],
-    conditions: []
-  },
-  {
-    id: 'patient_3',
-    name: 'Mike Johnson',
-    email: 'mike.johnson@email.com',
-    phoneNumber: '+1 (555) 345-6789',
-    birthDate: '1978-11-08',
-    gender: 'Male',
-    bloodType: 'B-',
-    status: 'emergency',
-    totalVisits: 15,
-    lastVisit: '2024-03-14T16:45:00Z',
-    allergies: ['Latex'],
-    conditions: ['Diabetes Type 2', 'High Cholesterol']
-  },
-  {
-    id: 'patient_4',
-    name: 'Emily Davis',
-    email: 'emily.davis@email.com',
-    phoneNumber: '+1 (555) 456-7890',
-    birthDate: '1995-05-12',
-    gender: 'Female',
-    bloodType: 'AB+',
-    status: 'active',
-    totalVisits: 5,
-    lastVisit: '2024-02-20T09:15:00Z',
-    allergies: [],
-    conditions: []
-  },
-  {
-    id: 'patient_5',
-    name: 'Robert Brown',
-    email: 'robert.brown@email.com',
-    phoneNumber: '+1 (555) 567-8901',
-    birthDate: '1960-12-03',
-    gender: 'Male',
-    bloodType: 'O-',
-    status: 'inactive',
-    totalVisits: 25,
-    lastVisit: '2023-11-15T11:30:00Z',
-    allergies: ['Sulfa drugs'],
-    conditions: ['Arthritis', 'Hypertension']
-  }
-];
 
 const styles = StyleSheet.create({
   container: {

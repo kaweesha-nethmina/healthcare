@@ -51,16 +51,17 @@ const UploadDocumentScreen = ({ navigation }) => {
     setLoading(true);
     try {
       if (!user?.uid) {
-        console.log('No user logged in, using mock data');
-        setDocuments(mockDocuments);
+        console.log('No user logged in');
+        setDocuments([]);
         return;
       }
 
       console.log('Loading documents from Firebase for user:', user.uid);
       
       // Query user's documents from Firestore
+      // Removed orderBy to avoid composite index requirement
       const documentsRef = collection(db, 'users', user.uid, 'documents');
-      const q = query(documentsRef, orderBy('uploadDate', 'desc'));
+      const q = query(documentsRef); // Removed orderBy('uploadDate', 'desc') to avoid composite index
       const querySnapshot = await getDocs(q);
       
       const userDocuments = [];
@@ -71,12 +72,15 @@ const UploadDocumentScreen = ({ navigation }) => {
         });
       });
       
+      // Sort in memory instead of using Firestore orderBy
+      userDocuments.sort((a, b) => new Date(b.uploadDate) - new Date(a.uploadDate));
+      
       console.log('Loaded documents:', userDocuments.length);
       setDocuments(userDocuments);
     } catch (error) {
       console.error('Error loading documents from Firebase:', error);
-      Alert.alert('Info', 'Loading documents locally. Please check your internet connection.');
-      setDocuments(mockDocuments);
+      Alert.alert('Error', 'Failed to load documents. Please check your internet connection.');
+      setDocuments([]);
     } finally {
       setLoading(false);
     }
@@ -511,34 +515,6 @@ const UploadDocumentScreen = ({ navigation }) => {
     </SafeAreaView>
   );
 };
-
-// Mock documents data
-const mockDocuments = [
-  {
-    id: '1',
-    name: 'Blood Test Results - March 2024',
-    type: 'application/pdf',
-    size: 1024576,
-    uploadDate: '2024-03-15T10:00:00Z',
-    category: 'Lab Results'
-  },
-  {
-    id: '2',
-    name: 'Prescription - Dr. Johnson',
-    type: 'image/jpeg',
-    size: 512000,
-    uploadDate: '2024-03-10T14:30:00Z',
-    category: 'Prescriptions'
-  },
-  {
-    id: '3',
-    name: 'Insurance Card',
-    type: 'image/png',
-    size: 256000,
-    uploadDate: '2024-02-28T09:15:00Z',
-    category: 'Insurance'
-  }
-];
 
 const styles = StyleSheet.create({
   container: {

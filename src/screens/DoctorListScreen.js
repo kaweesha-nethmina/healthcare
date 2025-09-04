@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -7,9 +7,19 @@ import {
   ScrollView,
   TouchableOpacity,
   TextInput,
+  Alert,
   ActivityIndicator
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useAuth } from '../context/AuthContext';
+import {
+  collection,
+  query,
+  where,
+  getDocs,
+  onSnapshot
+} from 'firebase/firestore';
+import { db } from '../services/firebase';
 import {
   COLORS,
   FONT_SIZES,
@@ -21,36 +31,119 @@ import Card from '../components/Card';
 import Button from '../components/Button';
 
 const DoctorListScreen = ({ navigation, route }) => {
-  const { searchQuery: initialSearch, specialization: initialSpecialization, urgent, type } = route.params || {};
-  
-  const [searchQuery, setSearchQuery] = useState(initialSearch || '');
-  const [selectedSpecialization, setSelectedSpecialization] = useState(initialSpecialization || '');
+  const { userProfile } = useAuth();
   const [doctors, setDoctors] = useState([]);
   const [filteredDoctors, setFilteredDoctors] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedSpecialization, setSelectedSpecialization] = useState('');
+  const [urgent, setUrgent] = useState(false);
   const [sortBy, setSortBy] = useState('rating'); // rating, availability, experience
+  const [chatMode, setChatMode] = useState(false); // New state for chat mode
+  const doctorsListenerRef = useRef(null);
 
   useEffect(() => {
+    // Check if we're in chat mode
+    if (route?.params?.chatMode) {
+      setChatMode(true);
+    }
     loadDoctors();
+    const unsubscribe = setupDoctorsListener();
+    
+    return () => {
+      if (unsubscribe) unsubscribe();
+    };
   }, []);
 
   useEffect(() => {
     filterDoctors();
-  }, [searchQuery, selectedSpecialization, doctors, sortBy]);
+  }, [doctors, searchQuery, selectedSpecialization, urgent, sortBy]);
+
+  const setupDoctorsListener = () => {
+    try {
+      // Listen for doctors in real-time
+      // Only filter by role 'doctor', remove isVerified and isActive filters for now
+      const doctorsQuery = query(
+        collection(db, 'users'),
+        where('role', '==', 'doctor')
+      );
+      
+      return onSnapshot(doctorsQuery, (snapshot) => {
+        const doctorsData = [];
+        snapshot.forEach((doc) => {
+          const data = doc.data();
+          doctorsData.push({
+            id: doc.id,
+            uid: doc.id,
+            name: `${data.firstName || ''} ${data.lastName || ''}`.trim() || 'Doctor',
+            specialization: data.specialization || 'General Practitioner',
+            rating: data.rating || 0,
+            reviewCount: data.reviewCount || 0,
+            experience: data.experience || 5,
+            location: data.address || 'Medical Center',
+            consultationFee: data.consultationFee || 100,
+            availableNow: data.availableNow || false,
+            phone: data.phone || '',
+            email: data.email || '',
+            licenseNumber: data.licenseNumber || '',
+            languages: data.languages || ['en'],
+            isVerified: data.isVerified || false,
+            isActive: data.isActive || false
+          });
+        });
+        
+        setDoctors(doctorsData);
+      }, (error) => {
+        console.error('Error listening to doctors:', error);
+      });
+    } catch (error) {
+      console.error('Error setting up doctors listener:', error);
+      return null;
+    }
+  };
 
   const loadDoctors = async () => {
     try {
       setLoading(true);
-      // In a real app, fetch from Firebase
-      // For now, using mock data
-      setTimeout(() => {
-        setDoctors(mockDoctors);
-        setLoading(false);
-      }, 1000);
+      
+      // Fetch doctors from Firebase users collection where role is 'doctor'
+      // Only filter by role 'doctor', remove isVerified and isActive filters for now
+      const doctorsQuery = query(
+        collection(db, 'users'),
+        where('role', '==', 'doctor')
+      );
+      
+      const querySnapshot = await getDocs(doctorsQuery);
+      const doctorsData = [];
+      
+      querySnapshot.forEach((doc) => {
+        const data = doc.data();
+        doctorsData.push({
+          id: doc.id,
+          uid: doc.id,
+          name: `${data.firstName || ''} ${data.lastName || ''}`.trim() || 'Doctor',
+          specialization: data.specialization || 'General Practitioner',
+          rating: data.rating || 0,
+          reviewCount: data.reviewCount || 0,
+          experience: data.experience || 5,
+          location: data.address || 'Medical Center',
+          consultationFee: data.consultationFee || 100,
+          availableNow: data.availableNow || false,
+          phone: data.phone || '',
+          email: data.email || '',
+          licenseNumber: data.licenseNumber || '',
+          languages: data.languages || ['en'],
+          isVerified: data.isVerified || false,
+          isActive: data.isActive || false
+        });
+      });
+      
+      setDoctors(doctorsData);
+      setLoading(false);
     } catch (error) {
       console.error('Error loading doctors:', error);
-      setDoctors(mockDoctors);
       setLoading(false);
+      // In a production app, we might want to show an error message to the user
     }
   };
 
@@ -93,7 +186,43 @@ const DoctorListScreen = ({ navigation, route }) => {
   };
 
   const handleBookAppointment = (doctor) => {
-    navigation.navigate('Booking', { doctor });
+    if (chatMode) {
+      // Navigate to chat with the selected doctor
+      // Generate a unique chat ID for direct messaging
+      const patientId = userProfile?.uid;
+      const doctorId = doctor.id;
+      
+      if (!patientId || !doctorId) {
+        Alert.alert('Error', 'Unable to start chat. Missing user information.');
+        return;
+      }
+      
+      // Create a consistent chatId for direct messaging
+      const participantIds = [doctorId, patientId].sort();
+      const chatId = `${participantIds[0]}_${participantIds[1]}`;
+      
+      // Navigate to chat with all required parameters
+      navigation.navigate('Chat', {
+        doctorId: doctorId,
+        doctorName: doctor.name,
+        patientId: patientId,
+        patientName: `${userProfile?.firstName || ''} ${userProfile?.lastName || ''}`.trim() || 'Patient',
+        chatId: chatId // Include the generated chatId
+      });
+    } else {
+      // Normal booking flow
+      navigation.navigate('Booking', { doctor });
+    }
+  };
+
+  const handleViewProfile = (doctor) => {
+    if (chatMode) {
+      // In chat mode, we might want to show a simplified profile or just start chat
+      handleBookAppointment(doctor);
+    } else {
+      // Normal profile view
+      navigation.navigate('DoctorProfile', { doctorId: doctor.id });
+    }
   };
 
   const DoctorCard = ({ doctor }) => (
@@ -117,36 +246,23 @@ const DoctorListScreen = ({ navigation, route }) => {
             { backgroundColor: doctor.availableNow ? COLORS.SUCCESS : COLORS.GRAY_MEDIUM }
           ]}>
             <Text style={styles.availabilityText}>
-              {doctor.availableNow ? 'Available' : 'Busy'}
+              {doctor.availableNow ? 'Available' : 'Offline'}
             </Text>
           </View>
         </View>
       </View>
-
-      <View style={styles.doctorDetails}>
-        <View style={styles.detailItem}>
-          <Ionicons name="location-outline" size={16} color={COLORS.TEXT_SECONDARY} />
-          <Text style={styles.detailText}>{doctor.location}</Text>
-        </View>
-        <View style={styles.detailItem}>
-          <Ionicons name="time-outline" size={16} color={COLORS.TEXT_SECONDARY} />
-          <Text style={styles.detailText}>{doctor.experience} years experience</Text>
-        </View>
-        <View style={styles.detailItem}>
-          <Ionicons name="medical-outline" size={16} color={COLORS.TEXT_SECONDARY} />
-          <Text style={styles.detailText}>Consultation fee: ${doctor.consultationFee}</Text>
-        </View>
-      </View>
-
+      
       <View style={styles.doctorActions}>
         <Button
-          title="View Profile"
-          onPress={() => navigation.navigate('DoctorProfile', { doctor })}
+          title={chatMode ? "Chat Now" : "View Profile"}
           variant="outline"
+          size="small"
+          onPress={() => handleViewProfile(doctor)}
           style={styles.actionButton}
         />
         <Button
-          title="Book Appointment"
+          title={chatMode ? "Start Chat" : "Book Appointment"}
+          size="small"
           onPress={() => handleBookAppointment(doctor)}
           style={styles.actionButton}
         />
@@ -173,8 +289,17 @@ const DoctorListScreen = ({ navigation, route }) => {
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* Search and Filter Section */}
+      {/* Search Section */}
       <View style={styles.searchSection}>
+        <View style={styles.header}>
+          <Text style={styles.title}>{chatMode ? 'Select a Doctor to Chat' : 'Find a Doctor'}</Text>
+          <Text style={styles.subtitle}>
+            {chatMode 
+              ? 'Choose a doctor to start a conversation' 
+              : 'Browse and connect with healthcare providers'}
+          </Text>
+        </View>
+        
         <View style={styles.searchBar}>
           <Ionicons name="search-outline" size={20} color={COLORS.GRAY_MEDIUM} />
           <TextInput
@@ -182,52 +307,111 @@ const DoctorListScreen = ({ navigation, route }) => {
             placeholder="Search doctors..."
             value={searchQuery}
             onChangeText={setSearchQuery}
+            placeholderTextColor={COLORS.GRAY_MEDIUM}
           />
+          {searchQuery.length > 0 && (
+            <TouchableOpacity onPress={() => setSearchQuery('')}>
+              <Ionicons name="close-circle" size={20} color={COLORS.GRAY_MEDIUM} />
+            </TouchableOpacity>
+          )}
         </View>
 
-        {/* Specializations Filter */}
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterScroll}>
-          <SpecializationChip
-            specialization="All"
-            isSelected={selectedSpecialization === ''}
+        {/* Filter Chips */}
+        <ScrollView 
+          horizontal 
+          showsHorizontalScrollIndicator={false}
+          style={styles.filterScroll}
+        >
+          <TouchableOpacity
+            style={[
+              styles.specializationChip,
+              !selectedSpecialization && styles.selectedChip
+            ]}
             onPress={() => setSelectedSpecialization('')}
-          />
-          {MEDICAL_SPECIALIZATIONS.slice(0, 10).map((spec) => (
-            <SpecializationChip
-              key={spec}
-              specialization={spec}
-              isSelected={selectedSpecialization === spec}
-              onPress={() => setSelectedSpecialization(spec)}
-            />
+          >
+            <Text style={[
+              styles.chipText,
+              !selectedSpecialization && styles.selectedChipText
+            ]}>
+              All Specializations
+            </Text>
+          </TouchableOpacity>
+          
+          {MEDICAL_SPECIALIZATIONS.map((specialization) => (
+            <TouchableOpacity
+              key={specialization}
+              style={[
+                styles.specializationChip,
+                selectedSpecialization === specialization && styles.selectedChip
+              ]}
+              onPress={() => setSelectedSpecialization(selectedSpecialization === specialization ? '' : specialization)}
+            >
+              <Text style={[
+                styles.chipText,
+                selectedSpecialization === specialization && styles.selectedChipText
+              ]}>
+                {specialization}
+              </Text>
+            </TouchableOpacity>
           ))}
         </ScrollView>
-
+        
         {/* Sort Options */}
         <View style={styles.sortContainer}>
           <Text style={styles.sortLabel}>Sort by:</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-            {[
-              { key: 'rating', label: 'Rating' },
-              { key: 'experience', label: 'Experience' },
-              { key: 'availability', label: 'Availability' }
-            ].map((option) => (
-              <TouchableOpacity
-                key={option.key}
-                style={[
-                  styles.sortOption,
-                  sortBy === option.key && styles.selectedSortOption
-                ]}
-                onPress={() => setSortBy(option.key)}
-              >
-                <Text style={[
-                  styles.sortOptionText,
-                  sortBy === option.key && styles.selectedSortOptionText
-                ]}>
-                  {option.label}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
+          <TouchableOpacity
+            style={[
+              styles.sortOption,
+              sortBy === 'rating' && styles.selectedSortOption
+            ]}
+            onPress={() => setSortBy('rating')}
+          >
+            <Text style={[
+              styles.sortOptionText,
+              sortBy === 'rating' && styles.selectedSortOptionText
+            ]}>
+              Rating
+            </Text>
+          </TouchableOpacity>
+          
+          <TouchableOpacity
+            style={[
+              styles.sortOption,
+              sortBy === 'experience' && styles.selectedSortOption
+            ]}
+            onPress={() => setSortBy('experience')}
+          >
+            <Text style={[
+              styles.sortOptionText,
+              sortBy === 'experience' && styles.selectedSortOptionText
+            ]}>
+              Experience
+            </Text>
+          </TouchableOpacity>
+          
+          <TouchableOpacity
+            style={[
+              styles.sortOption,
+              sortBy === 'availability' && styles.selectedSortOption
+            ]}
+            onPress={() => setSortBy('availability')}
+          >
+            <Text style={[
+              styles.sortOptionText,
+              sortBy === 'availability' && styles.selectedSortOptionText
+            ]}>
+              Availability
+            </Text>
+          </TouchableOpacity>
+          
+          <TouchableOpacity
+            style={styles.sortOption}
+            onPress={() => setUrgent(!urgent)}
+          >
+            <Text style={styles.sortOptionText}>
+              {urgent ? 'All Doctors' : 'Available Now'}
+            </Text>
+          </TouchableOpacity>
         </View>
       </View>
 
@@ -263,73 +447,27 @@ const DoctorListScreen = ({ navigation, route }) => {
   );
 };
 
-// Mock doctors data
-const mockDoctors = [
-  {
-    id: '1',
-    name: 'Dr. Sarah Johnson',
-    specialization: 'General Practitioner',
-    rating: 4.8,
-    reviewCount: 127,
-    experience: 8,
-    location: 'Downtown Medical Center',
-    consultationFee: 75,
-    availableNow: true
-  },
-  {
-    id: '2',
-    name: 'Dr. Michael Chen',
-    specialization: 'Cardiologist',
-    rating: 4.9,
-    reviewCount: 203,
-    experience: 15,
-    location: 'Heart Care Clinic',
-    consultationFee: 150,
-    availableNow: false
-  },
-  {
-    id: '3',
-    name: 'Dr. Emily Rodriguez',
-    specialization: 'Dermatologist',
-    rating: 4.7,
-    reviewCount: 89,
-    experience: 6,
-    location: 'Skin Health Institute',
-    consultationFee: 120,
-    availableNow: true
-  },
-  {
-    id: '4',
-    name: 'Dr. James Wilson',
-    specialization: 'Orthopedist',
-    rating: 4.6,
-    reviewCount: 156,
-    experience: 12,
-    location: 'Bone & Joint Center',
-    consultationFee: 130,
-    availableNow: true
-  },
-  {
-    id: '5',
-    name: 'Dr. Lisa Anderson',
-    specialization: 'Pediatrician',
-    rating: 4.9,
-    reviewCount: 234,
-    experience: 10,
-    location: 'Children\'s Health Clinic',
-    consultationFee: 90,
-    availableNow: false
-  }
-];
-
 const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: COLORS.BACKGROUND,
   },
+  header: {
+    marginBottom: SPACING.MD,
+  },
+  title: {
+    fontSize: FONT_SIZES.XXL,
+    fontWeight: 'bold',
+    color: COLORS.TEXT_PRIMARY,
+    marginBottom: SPACING.XS,
+  },
+  subtitle: {
+    fontSize: FONT_SIZES.MD,
+    color: COLORS.TEXT_SECONDARY,
+  },
   searchSection: {
-    backgroundColor: COLORS.WHITE,
     padding: SPACING.MD,
+    backgroundColor: COLORS.WHITE,
     borderBottomWidth: 1,
     borderBottomColor: COLORS.BORDER,
   },
@@ -352,10 +490,10 @@ const styles = StyleSheet.create({
     marginBottom: SPACING.MD,
   },
   specializationChip: {
-    backgroundColor: COLORS.GRAY_LIGHT,
     paddingHorizontal: SPACING.MD,
     paddingVertical: SPACING.SM,
     borderRadius: BORDER_RADIUS.XL,
+    backgroundColor: COLORS.GRAY_LIGHT,
     marginRight: SPACING.SM,
   },
   selectedChip: {
@@ -372,19 +510,20 @@ const styles = StyleSheet.create({
   sortContainer: {
     flexDirection: 'row',
     alignItems: 'center',
+    flexWrap: 'wrap',
   },
   sortLabel: {
     fontSize: FONT_SIZES.SM,
-    fontWeight: '600',
-    color: COLORS.TEXT_PRIMARY,
+    color: COLORS.TEXT_SECONDARY,
     marginRight: SPACING.SM,
   },
   sortOption: {
-    backgroundColor: COLORS.GRAY_LIGHT,
-    paddingHorizontal: SPACING.MD,
+    paddingHorizontal: SPACING.SM,
     paddingVertical: SPACING.XS,
     borderRadius: BORDER_RADIUS.SM,
     marginRight: SPACING.SM,
+    marginBottom: SPACING.XS,
+    backgroundColor: COLORS.GRAY_LIGHT,
   },
   selectedSortOption: {
     backgroundColor: COLORS.PRIMARY,
@@ -392,6 +531,7 @@ const styles = StyleSheet.create({
   sortOptionText: {
     fontSize: FONT_SIZES.SM,
     color: COLORS.TEXT_SECONDARY,
+    fontWeight: '500',
   },
   selectedSortOptionText: {
     color: COLORS.WHITE,
@@ -401,13 +541,79 @@ const styles = StyleSheet.create({
     padding: SPACING.MD,
   },
   resultsCount: {
-    fontSize: FONT_SIZES.MD,
-    fontWeight: '600',
-    color: COLORS.TEXT_PRIMARY,
+    fontSize: FONT_SIZES.SM,
+    color: COLORS.TEXT_SECONDARY,
     marginBottom: SPACING.MD,
   },
   doctorsList: {
     flex: 1,
+  },
+  doctorCard: {
+    marginBottom: SPACING.MD,
+  },
+  doctorHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: SPACING.MD,
+  },
+  doctorAvatar: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: COLORS.PRIMARY,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: SPACING.MD,
+  },
+  doctorInfo: {
+    flex: 1,
+  },
+  doctorName: {
+    fontSize: FONT_SIZES.MD,
+    fontWeight: 'bold',
+    color: COLORS.TEXT_PRIMARY,
+    marginBottom: SPACING.XS / 2,
+  },
+  doctorSpecialization: {
+    fontSize: FONT_SIZES.SM,
+    color: COLORS.PRIMARY,
+    marginBottom: SPACING.XS / 2,
+  },
+  ratingContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  rating: {
+    fontSize: FONT_SIZES.SM,
+    color: COLORS.TEXT_SECONDARY,
+    fontWeight: '600',
+    marginLeft: SPACING.XS / 2,
+    marginRight: SPACING.XS,
+  },
+  reviewCount: {
+    fontSize: FONT_SIZES.XS,
+    color: COLORS.TEXT_SECONDARY,
+  },
+  availabilityContainer: {
+    alignItems: 'flex-end',
+  },
+  availabilityBadge: {
+    paddingHorizontal: SPACING.SM,
+    paddingVertical: SPACING.XS / 2,
+    borderRadius: BORDER_RADIUS.SM,
+  },
+  availabilityText: {
+    fontSize: FONT_SIZES.XS,
+    color: COLORS.WHITE,
+    fontWeight: '600',
+  },
+  doctorActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  actionButton: {
+    flex: 1,
+    marginHorizontal: SPACING.XS,
   },
   loadingContainer: {
     flex: 1,
@@ -437,85 +643,7 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZES.MD,
     color: COLORS.TEXT_SECONDARY,
     textAlign: 'center',
-  },
-  doctorCard: {
-    marginBottom: SPACING.MD,
-  },
-  doctorHeader: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    marginBottom: SPACING.MD,
-  },
-  doctorAvatar: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    backgroundColor: COLORS.PRIMARY,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: SPACING.MD,
-  },
-  doctorInfo: {
-    flex: 1,
-  },
-  doctorName: {
-    fontSize: FONT_SIZES.LG,
-    fontWeight: 'bold',
-    color: COLORS.TEXT_PRIMARY,
-    marginBottom: SPACING.XS / 2,
-  },
-  doctorSpecialization: {
-    fontSize: FONT_SIZES.MD,
-    color: COLORS.TEXT_SECONDARY,
-    marginBottom: SPACING.XS,
-  },
-  ratingContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  rating: {
-    fontSize: FONT_SIZES.SM,
-    fontWeight: '600',
-    color: COLORS.TEXT_PRIMARY,
-    marginLeft: SPACING.XS / 2,
-    marginRight: SPACING.XS,
-  },
-  reviewCount: {
-    fontSize: FONT_SIZES.SM,
-    color: COLORS.TEXT_SECONDARY,
-  },
-  availabilityContainer: {
-    alignItems: 'flex-end',
-  },
-  availabilityBadge: {
-    paddingHorizontal: SPACING.SM,
-    paddingVertical: SPACING.XS / 2,
-    borderRadius: BORDER_RADIUS.SM,
-  },
-  availabilityText: {
-    fontSize: FONT_SIZES.XS,
-    color: COLORS.WHITE,
-    fontWeight: '600',
-  },
-  doctorDetails: {
-    marginBottom: SPACING.MD,
-  },
-  detailItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: SPACING.XS,
-  },
-  detailText: {
-    fontSize: FONT_SIZES.SM,
-    color: COLORS.TEXT_SECONDARY,
-    marginLeft: SPACING.XS,
-  },
-  doctorActions: {
-    flexDirection: 'row',
-    gap: SPACING.MD,
-  },
-  actionButton: {
-    flex: 1,
+    paddingHorizontal: SPACING.LG,
   },
 });
 

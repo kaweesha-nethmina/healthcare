@@ -42,13 +42,59 @@ const AmbulanceDispatchScreen = ({ navigation, route }) => {
 
   const loadAmbulanceData = async () => {
     try {
-      // In a real app, fetch from Firebase real-time
-      setAmbulances(mockAmbulances);
-      setDispatches(mockDispatches);
+      // Fetch ambulances from Firebase
+      // Removed orderBy to avoid composite index requirement
+      const ambulancesQuery = query(
+        collection(db, 'ambulances')
+        // Removed orderBy('updatedAt', 'desc') to avoid composite index
+      );
+      
+      const ambulancesSnapshot = await getDocs(ambulancesQuery);
+      const ambulancesData = [];
+      
+      ambulancesSnapshot.forEach((doc) => {
+        ambulancesData.push({
+          id: doc.id,
+          ...doc.data()
+        });
+      });
+      
+      // Sort in memory instead of using Firestore orderBy
+      ambulancesData.sort((a, b) => {
+        const dateA = a.updatedAt ? (typeof a.updatedAt.toDate === 'function' ? a.updatedAt.toDate() : a.updatedAt) : new Date(0);
+        const dateB = b.updatedAt ? (typeof b.updatedAt.toDate === 'function' ? b.updatedAt.toDate() : b.updatedAt) : new Date(0);
+        return new Date(dateB) - new Date(dateA);
+      });
+      
+      setAmbulances(ambulancesData);
+      
+      // Fetch dispatches from Firebase
+      // Removed orderBy to avoid composite index requirement
+      const dispatchesQuery = query(
+        collection(db, 'dispatches')
+        // Removed orderBy('dispatchTime', 'desc') to avoid composite index
+      );
+      
+      const dispatchesSnapshot = await getDocs(dispatchesQuery);
+      const dispatchesData = [];
+      
+      dispatchesSnapshot.forEach((doc) => {
+        dispatchesData.push({
+          id: doc.id,
+          ...doc.data()
+        });
+      });
+      
+      // Sort in memory instead of using Firestore orderBy
+      dispatchesData.sort((a, b) => {
+        const dateA = a.dispatchTime ? (typeof a.dispatchTime.toDate === 'function' ? a.dispatchTime.toDate() : a.dispatchTime) : new Date(0);
+        const dateB = b.dispatchTime ? (typeof b.dispatchTime.toDate === 'function' ? b.dispatchTime.toDate() : b.dispatchTime) : new Date(0);
+        return new Date(dateB) - new Date(dateA);
+      });
+      
+      setDispatches(dispatchesData);
     } catch (error) {
       console.error('Error loading ambulance data:', error);
-      setAmbulances(mockAmbulances);
-      setDispatches(mockDispatches);
     }
   };
 
@@ -58,7 +104,7 @@ const AmbulanceDispatchScreen = ({ navigation, route }) => {
     setRefreshing(false);
   };
 
-  const handleDispatchAmbulance = (ambulance, emergency) => {
+  const handleDispatchAmbulance = async (ambulance, emergency) => {
     Alert.alert(
       'Dispatch Ambulance',
       `Dispatch ${ambulance.callSign} to emergency ${emergency?.id || 'location'}?`,
@@ -66,28 +112,48 @@ const AmbulanceDispatchScreen = ({ navigation, route }) => {
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Dispatch',
-          onPress: () => {
-            // Update ambulance status
-            const updatedAmbulances = ambulances.map(a =>
-              a.id === ambulance.id 
-                ? { ...a, status: 'dispatched', currentEmergency: emergency?.id || emergencyId }
-                : a
-            );
-            setAmbulances(updatedAmbulances);
-            
-            // Add to dispatch list
-            const newDispatch = {
-              id: `DISP${Date.now()}`,
-              ambulanceId: ambulance.id,
-              emergencyId: emergency?.id || emergencyId,
-              dispatchTime: new Date().toISOString(),
-              status: 'en_route',
-              estimatedArrival: new Date(Date.now() + 15 * 60000).toISOString() // 15 minutes
-            };
-            setDispatches([newDispatch, ...dispatches]);
-            
-            setShowDispatchModal(false);
-            Alert.alert('Success', `${ambulance.callSign} has been dispatched.`);
+          onPress: async () => {
+            try {
+              // Update ambulance status in Firebase
+              const ambulanceRef = doc(db, 'ambulances', ambulance.id);
+              await updateDoc(ambulanceRef, {
+                status: 'dispatched',
+                currentEmergency: emergency?.id || emergencyId,
+                updatedAt: serverTimestamp()
+              });
+              
+              // Add to dispatch list in Firebase
+              const newDispatch = {
+                ambulanceId: ambulance.id,
+                emergencyId: emergency?.id || emergencyId,
+                dispatchTime: serverTimestamp(),
+                status: 'en_route',
+                estimatedArrival: new Date(Date.now() + 15 * 60000).toISOString() // 15 minutes
+              };
+              
+              const dispatchRef = await addDoc(collection(db, 'dispatches'), newDispatch);
+              
+              // Update local state
+              const updatedAmbulances = ambulances.map(a =>
+                a.id === ambulance.id 
+                  ? { ...a, status: 'dispatched', currentEmergency: emergency?.id || emergencyId }
+                  : a
+              );
+              setAmbulances(updatedAmbulances);
+              
+              const newDispatchWithId = {
+                id: dispatchRef.id,
+                ...newDispatch
+              };
+              
+              setDispatches([newDispatchWithId, ...dispatches]);
+              
+              setShowDispatchModal(false);
+              Alert.alert('Success', `${ambulance.callSign} has been dispatched.`);
+            } catch (error) {
+              console.error('Error dispatching ambulance:', error);
+              Alert.alert('Error', 'Failed to dispatch ambulance');
+            }
           }
         }
       ]
@@ -248,7 +314,7 @@ const AmbulanceDispatchScreen = ({ navigation, route }) => {
             
             {/* Emergency List */}
             <View style={styles.emergencyList}>
-              {mockEmergencies.map((emergency) => (
+              {emergencies.map((emergency) => (
                 <TouchableOpacity
                   key={emergency.id}
                   style={styles.emergencyOption}
@@ -404,91 +470,6 @@ const AmbulanceDispatchScreen = ({ navigation, route }) => {
     </SafeAreaView>
   );
 };
-
-// Mock data
-const mockAmbulances = [
-  {
-    id: 'AMB001',
-    callSign: 'Ambulance 101',
-    type: 'Advanced Life Support',
-    status: 'available',
-    currentLocation: 'Central Station',
-    crew: ['Dr. Smith', 'Paramedic Jones'],
-    equipment: ['Defibrillator', 'Oxygen', 'Stretcher', 'IV Kit'],
-    fuelLevel: 85,
-    totalCalls: 3,
-    eta: '5 mins',
-    coordinates: { lat: 40.7128, lng: -74.0060 }
-  },
-  {
-    id: 'AMB002',
-    callSign: 'Ambulance 102',
-    type: 'Basic Life Support',
-    status: 'dispatched',
-    currentLocation: 'En route to Main St',
-    crew: ['EMT Wilson', 'EMT Brown'],
-    equipment: ['Basic First Aid', 'Oxygen', 'Stretcher'],
-    fuelLevel: 70,
-    totalCalls: 5,
-    eta: '12 mins',
-    coordinates: { lat: 40.7589, lng: -73.9851 },
-    currentEmergency: 'EMG001'
-  },
-  {
-    id: 'AMB003',
-    callSign: 'Ambulance 103',
-    type: 'Critical Care',
-    status: 'on_scene',
-    currentLocation: '456 Oak Avenue',
-    crew: ['Dr. Davis', 'Nurse Taylor', 'Paramedic Lee'],
-    equipment: ['Ventilator', 'Cardiac Monitor', 'Advanced Drugs'],
-    fuelLevel: 60,
-    totalCalls: 2,
-    eta: 'On scene',
-    coordinates: { lat: 40.7505, lng: -73.9934 },
-    currentEmergency: 'EMG003'
-  }
-];
-
-const mockDispatches = [
-  {
-    id: 'DISP001',
-    ambulanceId: 'AMB002',
-    emergencyId: 'EMG001',
-    dispatchTime: new Date(Date.now() - 10 * 60000).toISOString(),
-    status: 'en_route',
-    estimatedArrival: new Date(Date.now() + 5 * 60000).toISOString()
-  },
-  {
-    id: 'DISP002',
-    ambulanceId: 'AMB003',
-    emergencyId: 'EMG003',
-    dispatchTime: new Date(Date.now() - 25 * 60000).toISOString(),
-    status: 'on_scene',
-    estimatedArrival: new Date(Date.now() - 5 * 60000).toISOString()
-  }
-];
-
-const mockEmergencies = [
-  {
-    id: 'EMG001',
-    location: '123 Main St, Downtown',
-    type: 'Medical Emergency',
-    priority: 'critical'
-  },
-  {
-    id: 'EMG002',
-    location: 'Highway 101, Mile 15',
-    type: 'Traffic Accident',
-    priority: 'high'
-  },
-  {
-    id: 'EMG004',
-    location: '789 Pine Street',
-    type: 'Medical Emergency',
-    priority: 'medium'
-  }
-];
 
 const styles = StyleSheet.create({
   container: {

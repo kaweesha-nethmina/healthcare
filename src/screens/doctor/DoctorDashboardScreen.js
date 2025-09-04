@@ -12,10 +12,20 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../context/AuthContext';
 import {
+  collection,
+  query,
+  where,
+  getDocs,
+  onSnapshot
+} from 'firebase/firestore';
+import { db } from '../../services/firebase';
+import { NotificationService } from '../../services/notificationService';
+import {
   COLORS,
   FONT_SIZES,
   SPACING,
-  BORDER_RADIUS
+  BORDER_RADIUS,
+  CONSULTATION_STATUS
 } from '../../constants';
 import Card from '../../components/Card';
 import Button from '../../components/Button';
@@ -25,7 +35,12 @@ const DoctorDashboardScreen = ({ navigation }) => {
   const [dashboardData, setDashboardData] = useState({
     todayAppointments: [],
     pendingRequests: [],
-    statistics: {},
+    statistics: {
+      todayAppointments: 0,
+      weeklyAppointments: 0,
+      totalPatients: 0,
+      rating: 0
+    },
     notifications: []
   });
   const [refreshing, setRefreshing] = useState(false);
@@ -33,20 +48,232 @@ const DoctorDashboardScreen = ({ navigation }) => {
 
   useEffect(() => {
     loadDashboardData();
+    // Set up real-time updates
+    const unsubscribeAppointments = setupAppointmentsListener();
+    const unsubscribeNotifications = setupNotificationsListener();
+    
+    // Cleanup listeners on unmount
+    return () => {
+      if (unsubscribeAppointments) unsubscribeAppointments();
+      if (unsubscribeNotifications) unsubscribeNotifications();
+    };
   }, []);
+
+  const setupAppointmentsListener = () => {
+    try {
+      // Listen for doctor's appointments
+      const appointmentsQuery = query(
+        collection(db, 'appointments'),
+        where('doctorId', '==', userProfile.uid)
+      );
+      
+      return onSnapshot(appointmentsQuery, (snapshot) => {
+        const appointmentsData = [];
+        snapshot.forEach((doc) => {
+          const data = doc.data();
+          appointmentsData.push({
+            id: doc.id,
+            ...data,
+            patientName: data.patientName || 'Unknown Patient',
+            time: data.time || 'N/A',
+            type: data.type || 'Consultation',
+            reason: data.reason || 'No reason provided',
+            timeAgo: data.timeAgo || 'Unknown time'
+          });
+        });
+        
+        // Sort appointments by date
+        appointmentsData.sort((a, b) => {
+          const dateA = new Date(a.appointmentDate);
+          const dateB = new Date(b.appointmentDate);
+          return dateA - dateB;
+        });
+        
+        // Get today's appointments
+        const today = new Date().toDateString();
+        const todaysAppointments = appointmentsData.filter(apt => {
+          const aptDate = new Date(apt.appointmentDate).toDateString();
+          return aptDate === today;
+        }).map(apt => ({
+          ...apt,
+          patientName: apt.patientName || 'Unknown Patient',
+          time: apt.time || 'N/A',
+          type: apt.type || 'Consultation',
+          reason: apt.reason || 'No reason provided'
+        }));
+        
+        // Get pending requests (confirmed appointments)
+        const pendingRequests = appointmentsData.filter(apt => 
+          apt.status === CONSULTATION_STATUS.CONFIRMED
+        ).map(apt => ({
+          ...apt,
+          patientName: apt.patientName || 'Unknown Patient',
+          type: apt.type || 'Consultation',
+          timeAgo: apt.timeAgo || 'Unknown time',
+          reason: apt.reason || 'No reason provided'
+        }));
+        
+        setDashboardData(prev => ({
+          ...prev,
+          todayAppointments: todaysAppointments,
+          pendingRequests: pendingRequests
+        }));
+        
+        // Update statistics
+        updateStatistics(appointmentsData);
+      }, (error) => {
+        console.error('Error listening to appointments:', error);
+      });
+    } catch (error) {
+      console.error('Error setting up appointments listener:', error);
+      return null;
+    }
+  };
+
+  const setupNotificationsListener = () => {
+    try {
+      // Listen for doctor's notifications
+      return NotificationService.subscribeToUserNotifications(
+        userProfile.uid,
+        (notifications) => {
+          setDashboardData(prev => ({
+            ...prev,
+            notifications: (notifications || []).slice(0, 3) // Show only first 3 notifications
+          }));
+        },
+        { limitCount: 3 }
+      );
+    } catch (error) {
+      console.error('Error setting up notifications listener:', error);
+      return null;
+    }
+  };
+
+  const updateStatistics = (appointmentsData) => {
+    try {
+      // Calculate statistics
+      const today = new Date().toDateString();
+      const todaysAppointments = appointmentsData.filter(apt => {
+        const aptDate = new Date(apt.appointmentDate).toDateString();
+        return aptDate === today;
+      });
+      
+      // Calculate weekly appointments (last 7 days)
+      const oneWeekAgo = new Date();
+      oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+      const weeklyAppointments = appointmentsData.filter(apt => {
+        const aptDate = new Date(apt.appointmentDate);
+        return aptDate >= oneWeekAgo;
+      });
+      
+      // Calculate total patients (unique patient IDs)
+      const uniquePatients = [...new Set(appointmentsData.map(apt => apt.patientId))];
+      
+      const statistics = {
+        todayAppointments: todaysAppointments.length || 0,
+        weeklyAppointments: weeklyAppointments.length || 0,
+        totalPatients: uniquePatients.length || 0,
+        rating: userProfile?.rating || 0
+      };
+      
+      setDashboardData(prev => ({
+        ...prev,
+        statistics: statistics
+      }));
+    } catch (error) {
+      console.error('Error updating statistics:', error);
+    }
+  };
 
   const loadDashboardData = async () => {
     try {
       setLoading(true);
-      // In a real app, fetch from Firebase
-      // For now, using mock data
-      setTimeout(() => {
-        setDashboardData(mockDashboardData);
-        setLoading(false);
-      }, 1000);
+      
+      // Load appointments
+      const appointmentsQuery = query(
+        collection(db, 'appointments'),
+        where('doctorId', '==', userProfile.uid)
+      );
+      
+      const appointmentsSnapshot = await getDocs(appointmentsQuery);
+      const appointmentsData = [];
+      appointmentsSnapshot.forEach((doc) => {
+        const data = doc.data();
+        appointmentsData.push({
+          id: doc.id,
+          ...data,
+          patientName: data.patientName || 'Unknown Patient',
+          time: data.time || 'N/A',
+          type: data.type || 'Consultation',
+          reason: data.reason || 'No reason provided',
+          timeAgo: data.timeAgo || 'Unknown time'
+        });
+      });
+      
+      // Sort appointments by date
+      appointmentsData.sort((a, b) => {
+        const dateA = new Date(a.appointmentDate);
+        const dateB = new Date(b.appointmentDate);
+        return dateA - dateB;
+      });
+      
+      // Get today's appointments
+      const today = new Date().toDateString();
+      const todaysAppointments = appointmentsData.filter(apt => {
+        const aptDate = new Date(apt.appointmentDate).toDateString();
+        return aptDate === today;
+      }).map(apt => ({
+        ...apt,
+        patientName: apt.patientName || 'Unknown Patient',
+        time: apt.time || 'N/A',
+        type: apt.type || 'Consultation',
+        reason: apt.reason || 'No reason provided'
+      }));
+      
+      // Get pending requests (confirmed appointments)
+      const pendingRequests = appointmentsData.filter(apt => 
+        apt.status === CONSULTATION_STATUS.CONFIRMED
+      ).map(apt => ({
+        ...apt,
+        patientName: apt.patientName || 'Unknown Patient',
+        type: apt.type || 'Consultation',
+        timeAgo: apt.timeAgo || 'Unknown time',
+        reason: apt.reason || 'No reason provided'
+      }));
+      
+      // Load notifications
+      const notifications = await NotificationService.getUserNotifications(
+        userProfile.uid,
+        { limitCount: 3 }
+      );
+      
+      // Calculate statistics
+      const oneWeekAgo = new Date();
+      oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+      const weeklyAppointments = appointmentsData.filter(apt => {
+        const aptDate = new Date(apt.appointmentDate);
+        return aptDate >= oneWeekAgo;
+      });
+      
+      const uniquePatients = [...new Set(appointmentsData.map(apt => apt.patientId))];
+      
+      const statistics = {
+        todayAppointments: todaysAppointments.length,
+        weeklyAppointments: weeklyAppointments.length,
+        totalPatients: uniquePatients.length,
+        rating: userProfile?.rating || 0
+      };
+      
+      setDashboardData({
+        todayAppointments: todaysAppointments,
+        pendingRequests: pendingRequests,
+        statistics: statistics,
+        notifications: notifications || []
+      });
+      
+      setLoading(false);
     } catch (error) {
       console.error('Error loading dashboard data:', error);
-      setDashboardData(mockDashboardData);
       setLoading(false);
     }
   };
@@ -78,14 +305,14 @@ const DoctorDashboardScreen = ({ navigation }) => {
     <TouchableOpacity style={styles.quickActionCard} onPress={onPress}>
       <View style={[styles.actionIcon, { backgroundColor: color }]}>
         <Ionicons name={icon} size={24} color={COLORS.WHITE} />
-        {badge && (
+        {badge && badge > 0 && (
           <View style={styles.badge}>
             <Text style={styles.badgeText}>{badge}</Text>
           </View>
         )}
       </View>
-      <Text style={styles.actionTitle}>{title}</Text>
-      <Text style={styles.actionSubtitle}>{subtitle}</Text>
+      <Text style={styles.actionTitle}>{title || 'Action'}</Text>
+      <Text style={styles.actionSubtitle}>{subtitle || 'Description'}</Text>
     </TouchableOpacity>
   );
 
@@ -123,26 +350,23 @@ const DoctorDashboardScreen = ({ navigation }) => {
             </Text>
           </View>
           <View style={styles.appointmentDetails}>
-            <Text style={styles.patientName}>{appointment.patientName}</Text>
+            <Text style={styles.patientName}>{appointment.patientName || 'Unknown Patient'}</Text>
             <Text style={styles.appointmentTime}>
-              {appointment.time} • {appointment.type}
+              {appointment.time || 'N/A'} • {appointment.type || 'Consultation'}
             </Text>
-            <Text style={styles.appointmentReason}>{appointment.reason}</Text>
+            <Text style={styles.appointmentReason}>{appointment.reason || 'No reason provided'}</Text>
           </View>
         </View>
         <View style={styles.appointmentActions}>
           <TouchableOpacity 
             style={styles.actionBtn}
-            onPress={() => navigation.navigate('Appointments')}
+            onPress={() => navigation.navigate('Appointments', { screen: 'AppointmentsMain' })}
           >
             <Ionicons name="calendar" size={20} color={COLORS.PRIMARY} />
           </TouchableOpacity>
           <TouchableOpacity 
             style={styles.actionBtn}
-            onPress={() => navigation.navigate('Chat', { 
-              patientId: appointment.patientId,
-              patientName: appointment.patientName 
-            })}
+            onPress={() => navigation.navigate('Consultations', { screen: 'ConsultationsMain' })}
           >
             <Ionicons name="chatbubble" size={20} color={COLORS.SUCCESS} />
           </TouchableOpacity>
@@ -165,26 +389,26 @@ const DoctorDashboardScreen = ({ navigation }) => {
           />
         </View>
         <View style={styles.requestInfo}>
-          <Text style={styles.requestPatient}>{request.patientName}</Text>
-          <Text style={styles.requestType}>{request.type} Request</Text>
-          <Text style={styles.requestTime}>{request.timeAgo}</Text>
+          <Text style={styles.requestPatient}>{request.patientName || 'Unknown Patient'}</Text>
+          <Text style={styles.requestType}>{request.type || 'Consultation'} Request</Text>
+          <Text style={styles.requestTime}>{request.timeAgo || 'Unknown time'}</Text>
         </View>
         <View style={styles.requestActions}>
           <TouchableOpacity 
             style={[styles.requestBtn, styles.acceptBtn]}
-            onPress={() => Alert.alert('Request Accepted', `Accepted ${request.type} request from ${request.patientName}`)}
+            onPress={() => Alert.alert('Request Accepted', `Accepted ${request.type || 'consultation'} request from ${request.patientName || 'unknown patient'}`)}
           >
             <Ionicons name="checkmark" size={16} color={COLORS.WHITE} />
           </TouchableOpacity>
           <TouchableOpacity 
             style={[styles.requestBtn, styles.declineBtn]}
-            onPress={() => Alert.alert('Request Declined', `Declined ${request.type} request from ${request.patientName}`)}
+            onPress={() => Alert.alert('Request Declined', `Declined ${request.type || 'consultation'} request from ${request.patientName || 'unknown patient'}`)}
           >
             <Ionicons name="close" size={16} color={COLORS.WHITE} />
           </TouchableOpacity>
         </View>
       </View>
-      <Text style={styles.requestReason}>{request.reason}</Text>
+      <Text style={styles.requestReason}>{request.reason || 'No reason provided'}</Text>
     </Card>
   );
 
@@ -200,18 +424,18 @@ const DoctorDashboardScreen = ({ navigation }) => {
           <View style={styles.welcomeContainer}>
             <Text style={styles.welcomeText}>Good morning,</Text>
             <Text style={styles.doctorName}>
-              Dr. {userProfile?.firstName} {userProfile?.lastName}
+              Dr. {userProfile?.firstName || ''} {userProfile?.lastName || ''}
             </Text>
-            <Text style={styles.specialization}>{userProfile?.specialization}</Text>
+            <Text style={styles.specialization}>{userProfile?.specialization || 'General Practitioner'}</Text>
           </View>
           <TouchableOpacity
             style={styles.notificationButton}
-            onPress={() => navigation.navigate('Notifications')}
+            onPress={() => navigation.navigate('Dashboard', { screen: 'Notifications' })}
           >
             <Ionicons name="notifications-outline" size={24} color={COLORS.TEXT_PRIMARY} />
             <View style={styles.notificationBadge}>
               <Text style={styles.notificationBadgeText}>
-                {dashboardData.notifications.length}
+                {dashboardData.notifications.length || 0}
               </Text>
             </View>
           </TouchableOpacity>
@@ -231,28 +455,28 @@ const DoctorDashboardScreen = ({ navigation }) => {
         <View style={styles.statisticsGrid}>
           <StatisticCard
             label="Today's Appointments"
-            value={dashboardData.statistics.todayAppointments}
+            value={dashboardData.statistics.todayAppointments || 0}
             icon="calendar"
             color={COLORS.PRIMARY}
             trend={12}
           />
           <StatisticCard
             label="This Week"
-            value={dashboardData.statistics.weeklyAppointments}
+            value={dashboardData.statistics.weeklyAppointments || 0}
             icon="bar-chart"
             color={COLORS.SUCCESS}
             trend={-5}
           />
           <StatisticCard
             label="Total Patients"
-            value={dashboardData.statistics.totalPatients}
+            value={dashboardData.statistics.totalPatients || 0}
             icon="people"
             color={COLORS.INFO}
             trend={8}
           />
           <StatisticCard
             label="Rating"
-            value={`${dashboardData.statistics.rating}/5`}
+            value={`${dashboardData.statistics.rating || 0}/5`}
             icon="star"
             color={COLORS.WARNING}
           />
@@ -267,29 +491,29 @@ const DoctorDashboardScreen = ({ navigation }) => {
               subtitle="View appointments"
               icon="calendar-outline"
               color={COLORS.PRIMARY}
-              onPress={() => navigation.navigate('Appointments')}
-              badge={dashboardData.todayAppointments.length}
+              onPress={() => navigation.navigate('Appointments', { screen: 'AppointmentsMain' })}
+              badge={dashboardData.todayAppointments.length || 0}
             />
             <QuickActionCard
               title="Patients"
               subtitle="Manage patients"
               icon="people-outline"
               color={COLORS.SUCCESS}
-              onPress={() => navigation.navigate('Patients')}
+              onPress={() => navigation.navigate('Patients', { screen: 'PatientsMain' })}
             />
             <QuickActionCard
               title="Consultations"
               subtitle="Video/Chat"
               icon="videocam-outline"
               color={COLORS.INFO}
-              onPress={() => navigation.navigate('Consultations')}
+              onPress={() => navigation.navigate('Consultations', { screen: 'ConsultationsMain' })}
             />
             <QuickActionCard
               title="Prescriptions"
               subtitle="Write prescriptions"
               icon="medical-outline"
               color={COLORS.WARNING}
-              onPress={() => navigation.navigate('Prescriptions')}
+              onPress={() => navigation.navigate('Patients', { screen: 'Prescriptions' })}
             />
           </View>
         </View>
@@ -298,7 +522,7 @@ const DoctorDashboardScreen = ({ navigation }) => {
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>Today's Appointments</Text>
-            <TouchableOpacity onPress={() => navigation.navigate('Appointments')}>
+            <TouchableOpacity onPress={() => navigation.navigate('Appointments', { screen: 'AppointmentsMain' })}>
               <Text style={styles.viewAllText}>View All</Text>
             </TouchableOpacity>
           </View>
@@ -324,7 +548,7 @@ const DoctorDashboardScreen = ({ navigation }) => {
             <Text style={styles.sectionTitle}>Pending Requests</Text>
             <View style={styles.requestsCount}>
               <Text style={styles.requestsCountText}>
-                {dashboardData.pendingRequests.length}
+                {dashboardData.pendingRequests.length || 0}
               </Text>
             </View>
           </View>
@@ -348,64 +572,7 @@ const DoctorDashboardScreen = ({ navigation }) => {
   );
 };
 
-// Mock dashboard data
-const mockDashboardData = {
-  todayAppointments: [
-    {
-      id: '1',
-      patientName: 'John Smith',
-      time: '10:00 AM',
-      type: 'Video Call',
-      reason: 'Follow-up consultation',
-      patientId: 'patient_1'
-    },
-    {
-      id: '2',
-      patientName: 'Sarah Wilson',
-      time: '2:00 PM',
-      type: 'In-Person',
-      reason: 'Regular checkup',
-      patientId: 'patient_2'
-    },
-    {
-      id: '3',
-      patientName: 'Mike Johnson',
-      time: '4:30 PM',
-      type: 'Chat',
-      reason: 'Prescription refill',
-      patientId: 'patient_3'
-    }
-  ],
-  pendingRequests: [
-    {
-      id: '1',
-      patientName: 'Alice Brown',
-      type: 'Urgent',
-      reason: 'Severe headache and dizziness',
-      timeAgo: '5 minutes ago',
-      urgent: true
-    },
-    {
-      id: '2',
-      patientName: 'Robert Davis',
-      type: 'Consultation',
-      reason: 'Questions about medication side effects',
-      timeAgo: '15 minutes ago',
-      urgent: false
-    }
-  ],
-  statistics: {
-    todayAppointments: 8,
-    weeklyAppointments: 47,
-    totalPatients: 156,
-    rating: 4.8
-  },
-  notifications: [
-    { id: '1', type: 'appointment', message: 'New appointment request' },
-    { id: '2', type: 'message', message: 'New patient message' },
-    { id: '3', type: 'emergency', message: 'Emergency consultation request' }
-  ]
-};
+
 
 const styles = StyleSheet.create({
   container: {

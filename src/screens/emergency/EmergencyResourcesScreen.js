@@ -40,11 +40,33 @@ const EmergencyResourcesScreen = ({ navigation }) => {
 
   const loadResources = async () => {
     try {
-      // In a real app, fetch from Firebase real-time
-      setResources(mockResources);
+      // Fetch resources from Firebase
+      // Removed orderBy to avoid composite index requirement
+      const resourcesQuery = query(
+        collection(db, 'emergencyResources')
+        // Removed orderBy('lastUpdated', 'desc') to avoid composite index
+      );
+      
+      const resourcesSnapshot = await getDocs(resourcesQuery);
+      const resourcesData = [];
+      
+      resourcesSnapshot.forEach((doc) => {
+        resourcesData.push({
+          id: doc.id,
+          ...doc.data()
+        });
+      });
+      
+      // Sort in memory instead of using Firestore orderBy
+      resourcesData.sort((a, b) => {
+        const dateA = a.lastUpdated ? (typeof a.lastUpdated.toDate === 'function' ? a.lastUpdated.toDate() : a.lastUpdated) : new Date(0);
+        const dateB = b.lastUpdated ? (typeof b.lastUpdated.toDate === 'function' ? b.lastUpdated.toDate() : b.lastUpdated) : new Date(0);
+        return new Date(dateB) - new Date(dateA);
+      });
+      
+      setResources(resourcesData);
     } catch (error) {
       console.error('Error loading resources:', error);
-      setResources(mockResources);
     }
   };
 
@@ -54,7 +76,7 @@ const EmergencyResourcesScreen = ({ navigation }) => {
     setRefreshing(false);
   };
 
-  const handleResourceAction = (resource, action) => {
+  const handleResourceAction = async (resource, action) => {
     switch (action) {
       case 'request':
         setSelectedResource(resource);
@@ -74,12 +96,26 @@ const EmergencyResourcesScreen = ({ navigation }) => {
             { text: 'Cancel', style: 'cancel' },
             {
               text: 'Reserve',
-              onPress: () => {
-                const updatedResources = resources.map(r =>
-                  r.id === resource.id ? { ...r, status: 'reserved' } : r
-                );
-                setResources(updatedResources);
-                Alert.alert('Success', `${resource.name} has been reserved.`);
+              onPress: async () => {
+                try {
+                  // Update resource status in Firebase
+                  const resourceRef = doc(db, 'emergencyResources', resource.id);
+                  await updateDoc(resourceRef, {
+                    status: 'reserved',
+                    lastUpdated: serverTimestamp()
+                  });
+                  
+                  // Update local state
+                  const updatedResources = resources.map(r =>
+                    r.id === resource.id ? { ...r, status: 'reserved' } : r
+                  );
+                  setResources(updatedResources);
+                  
+                  Alert.alert('Success', `${resource.name} has been reserved.`);
+                } catch (error) {
+                  console.error('Error reserving resource:', error);
+                  Alert.alert('Error', 'Failed to reserve resource');
+                }
               }
             }
           ]
@@ -483,82 +519,6 @@ const EmergencyResourcesScreen = ({ navigation }) => {
     </SafeAreaView>
   );
 };
-
-// Mock resources data
-const mockResources = [
-  {
-    id: 'RES001',
-    name: 'Mobile Emergency Unit',
-    category: 'vehicle',
-    description: 'Fully equipped mobile emergency response unit with advanced life support capabilities',
-    location: 'Central Fire Station',
-    status: 'available',
-    quantity: 2,
-    contactPerson: 'Chief Williams',
-    phone: '+1 (555) 911-0001',
-    lastUpdated: '2024-03-15 09:30 AM'
-  },
-  {
-    id: 'RES002',
-    name: 'Portable Defibrillators',
-    category: 'medical',
-    description: 'Automated External Defibrillators (AED) for cardiac emergencies',
-    location: 'Medical Supply Depot',
-    status: 'available',
-    quantity: 15,
-    contactPerson: 'Dr. Johnson',
-    phone: '+1 (555) 911-0002',
-    lastUpdated: '2024-03-15 08:45 AM'
-  },
-  {
-    id: 'RES003',
-    name: 'Emergency Generators',
-    category: 'equipment',
-    description: 'Backup power generators for critical infrastructure',
-    location: 'Equipment Warehouse',
-    status: 'in_use',
-    quantity: 5,
-    contactPerson: 'Engineer Smith',
-    phone: '+1 (555) 911-0003',
-    lastUpdated: '2024-03-15 10:15 AM'
-  },
-  {
-    id: 'RES004',
-    name: 'Emergency Shelter',
-    category: 'facility',
-    description: 'Temporary shelter facility for displaced persons',
-    location: 'Community Center',
-    status: 'available',
-    quantity: 1,
-    contactPerson: 'Manager Davis',
-    phone: '+1 (555) 911-0004',
-    lastUpdated: '2024-03-15 09:00 AM'
-  },
-  {
-    id: 'RES005',
-    name: 'Hazmat Response Team',
-    category: 'personnel',
-    description: 'Specialized team for hazardous material incidents',
-    location: 'Fire Station 3',
-    status: 'reserved',
-    quantity: 1,
-    contactPerson: 'Captain Brown',
-    phone: '+1 (555) 911-0005',
-    lastUpdated: '2024-03-15 10:00 AM'
-  },
-  {
-    id: 'RES006',
-    name: 'Search and Rescue Helicopters',
-    category: 'vehicle',
-    description: 'Air rescue helicopters for remote area emergencies',
-    location: 'Airport Base',
-    status: 'maintenance',
-    quantity: 3,
-    contactPerson: 'Pilot Anderson',
-    phone: '+1 (555) 911-0006',
-    lastUpdated: '2024-03-15 07:30 AM'
-  }
-];
 
 const styles = StyleSheet.create({
   container: {

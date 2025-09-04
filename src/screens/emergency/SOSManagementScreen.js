@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -15,10 +15,21 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../context/AuthContext';
 import {
+  collection,
+  query,
+  orderBy,
+  onSnapshot,
+  doc,
+  updateDoc,
+  serverTimestamp
+} from 'firebase/firestore';
+import { db } from '../../services/firebase';
+import {
   COLORS,
   FONT_SIZES,
   SPACING,
-  BORDER_RADIUS
+  BORDER_RADIUS,
+  EMERGENCY_STATUS
 } from '../../constants';
 import Card from '../../components/Card';
 import Button from '../../components/Button';
@@ -32,12 +43,16 @@ const SOSManagementScreen = ({ navigation }) => {
   const [filterStatus, setFilterStatus] = useState('all');
   const [selectedEmergency, setSelectedEmergency] = useState(null);
   const [showDetailModal, setShowDetailModal] = useState(false);
+  const emergenciesListenerRef = useRef(null);
 
   useEffect(() => {
     loadEmergencies();
-    // Set up real-time updates
-    const interval = setInterval(loadEmergencies, 15000);
-    return () => clearInterval(interval);
+    return () => {
+      // Clean up listener when component unmounts
+      if (emergenciesListenerRef.current) {
+        emergenciesListenerRef.current();
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -46,11 +61,52 @@ const SOSManagementScreen = ({ navigation }) => {
 
   const loadEmergencies = async () => {
     try {
-      // In a real app, fetch from Firebase real-time
-      setEmergencies(mockEmergencies);
+      // Set up real-time listener for emergencies
+      // Removed orderBy to avoid composite index requirement
+      const emergenciesQuery = query(
+        collection(db, 'emergencies')
+        // Removed orderBy('timestamp', 'desc') to avoid composite index
+      );
+      
+      emergenciesListenerRef.current = onSnapshot(emergenciesQuery, (snapshot) => {
+        const emergenciesData = [];
+        snapshot.forEach((doc) => {
+          const data = doc.data();
+          // Handle timestamp conversion properly
+          const timestamp = data.timestamp ? 
+            (typeof data.timestamp.toDate === 'function' ? data.timestamp.toDate() : data.timestamp) : 
+            new Date();
+          const createdAt = data.createdAt ? 
+            (typeof data.createdAt.toDate === 'function' ? data.createdAt.toDate() : data.createdAt) : 
+            new Date();
+          const updatedAt = data.updatedAt ? 
+            (typeof data.updatedAt.toDate === 'function' ? data.updatedAt.toDate() : data.updatedAt) : 
+            new Date();
+          
+          emergenciesData.push({
+            id: doc.id,
+            ...data,
+            timestamp,
+            createdAt,
+            updatedAt
+          });
+        });
+        
+        // Sort in memory instead of using Firestore orderBy
+        emergenciesData.sort((a, b) => {
+          const dateA = a.timestamp || new Date(0);
+          const dateB = b.timestamp || new Date(0);
+          return dateB - dateA; // Descending order (newest first)
+        });
+        
+        setEmergencies(emergenciesData);
+      }, (error) => {
+        console.error('Error listening to emergencies:', error);
+        setEmergencies([]);
+      });
     } catch (error) {
       console.error('Error loading emergencies:', error);
-      setEmergencies(mockEmergencies);
+      setEmergencies([]);
     }
   };
 
@@ -78,6 +134,21 @@ const SOSManagementScreen = ({ navigation }) => {
     setFilteredEmergencies(filtered);
   };
 
+  const updateEmergencyStatus = async (emergencyId, newStatus) => {
+    try {
+      const emergencyRef = doc(db, 'emergencies', emergencyId);
+      await updateDoc(emergencyRef, {
+        status: newStatus,
+        updatedAt: serverTimestamp()
+      });
+      
+      console.log(`Emergency ${emergencyId} status updated to ${newStatus}`);
+    } catch (error) {
+      console.error('Error updating emergency status:', error);
+      Alert.alert('Error', 'Failed to update emergency status');
+    }
+  };
+
   const handleEmergencyAction = (emergency, action) => {
     switch (action) {
       case 'respond':
@@ -88,12 +159,8 @@ const SOSManagementScreen = ({ navigation }) => {
             { text: 'Cancel', style: 'cancel' },
             {
               text: 'Assign Unit',
-              onPress: () => {
-                // Update emergency status
-                const updatedEmergencies = emergencies.map(e =>
-                  e.id === emergency.id ? { ...e, status: 'responding' } : e
-                );
-                setEmergencies(updatedEmergencies);
+              onPress: async () => {
+                await updateEmergencyStatus(emergency.id, EMERGENCY_STATUS.IN_PROGRESS);
                 Alert.alert('Success', 'Emergency response unit assigned.');
               }
             }
@@ -115,11 +182,8 @@ const SOSManagementScreen = ({ navigation }) => {
             {
               text: 'Close',
               style: 'destructive',
-              onPress: () => {
-                const updatedEmergencies = emergencies.map(e =>
-                  e.id === emergency.id ? { ...e, status: 'resolved' } : e
-                );
-                setEmergencies(updatedEmergencies);
+              onPress: async () => {
+                await updateEmergencyStatus(emergency.id, EMERGENCY_STATUS.COMPLETED);
                 Alert.alert('Success', 'Emergency marked as resolved.');
               }
             }
@@ -148,13 +212,15 @@ const SOSManagementScreen = ({ navigation }) => {
 
   const getStatusColor = (status) => {
     switch (status) {
-      case 'active':
+      case EMERGENCY_STATUS.PENDING:
         return COLORS.EMERGENCY;
-      case 'responding':
+      case EMERGENCY_STATUS.ASSIGNED:
         return COLORS.WARNING;
-      case 'resolved':
+      case EMERGENCY_STATUS.IN_PROGRESS:
+        return COLORS.INFO;
+      case EMERGENCY_STATUS.COMPLETED:
         return COLORS.SUCCESS;
-      case 'cancelled':
+      case EMERGENCY_STATUS.CANCELLED:
         return COLORS.GRAY_MEDIUM;
       default:
         return COLORS.INFO;
@@ -172,14 +238,14 @@ const SOSManagementScreen = ({ navigation }) => {
             <Text style={styles.emergencyId}>#{emergency.id}</Text>
             <Text style={styles.patientName}>{emergency.patientName}</Text>
             <Text style={styles.emergencyType}>{emergency.type}</Text>
-            <Text style={styles.emergencyTime}>{emergency.timestamp}</Text>
+            <Text style={styles.emergencyTime}>{formatTimestamp(emergency.timestamp)}</Text>
           </View>
           <View style={styles.emergencyMeta}>
             <View style={[styles.priorityBadge, { backgroundColor: getPriorityColor(emergency.priority) }]}>
               <Text style={styles.priorityText}>{emergency.priority.toUpperCase()}</Text>
             </View>
             <View style={[styles.statusBadge, { backgroundColor: getStatusColor(emergency.status) }]}>
-              <Text style={styles.statusText}>{emergency.status.toUpperCase()}</Text>
+              <Text style={styles.statusText}>{emergency.status.replace('_', ' ').toUpperCase()}</Text>
             </View>
           </View>
         </View>
@@ -189,7 +255,7 @@ const SOSManagementScreen = ({ navigation }) => {
       </TouchableOpacity>
 
       <View style={styles.emergencyActions}>
-        {emergency.status === 'active' && (
+        {emergency.status === EMERGENCY_STATUS.PENDING && (
           <>
             <TouchableOpacity
               style={[styles.actionButton, { backgroundColor: COLORS.SUCCESS }]}
@@ -217,7 +283,7 @@ const SOSManagementScreen = ({ navigation }) => {
           <Text style={styles.actionText}>Call</Text>
         </TouchableOpacity>
 
-        {emergency.status !== 'resolved' && (
+        {[EMERGENCY_STATUS.PENDING, EMERGENCY_STATUS.ASSIGNED, EMERGENCY_STATUS.IN_PROGRESS].includes(emergency.status) && (
           <TouchableOpacity
             style={[styles.actionButton, { backgroundColor: COLORS.ERROR }]}
             onPress={() => handleEmergencyAction(emergency, 'close')}
@@ -244,12 +310,18 @@ const SOSManagementScreen = ({ navigation }) => {
     </TouchableOpacity>
   );
 
+  const formatTimestamp = (timestamp) => {
+    if (!timestamp) return '';
+    return new Date(timestamp).toLocaleString();
+  };
+
   const getFilterCounts = () => {
     return {
       all: emergencies.length,
-      active: emergencies.filter(e => e.status === 'active').length,
-      responding: emergencies.filter(e => e.status === 'responding').length,
-      resolved: emergencies.filter(e => e.status === 'resolved').length
+      pending: emergencies.filter(e => e.status === EMERGENCY_STATUS.PENDING).length,
+      assigned: emergencies.filter(e => e.status === EMERGENCY_STATUS.ASSIGNED).length,
+      in_progress: emergencies.filter(e => e.status === EMERGENCY_STATUS.IN_PROGRESS).length,
+      completed: emergencies.filter(e => e.status === EMERGENCY_STATUS.COMPLETED).length
     };
   };
 
@@ -310,7 +382,7 @@ const SOSManagementScreen = ({ navigation }) => {
                 <View style={styles.detailRow}>
                   <Text style={styles.detailLabel}>Status:</Text>
                   <Text style={[styles.detailValue, { color: getStatusColor(selectedEmergency.status) }]}>
-                    {selectedEmergency.status.toUpperCase()}
+                    {selectedEmergency.status.replace('_', ' ').toUpperCase()}
                   </Text>
                 </View>
                 <View style={styles.detailRow}>
@@ -354,20 +426,20 @@ const SOSManagementScreen = ({ navigation }) => {
       {/* Header Stats */}
       <View style={styles.statsHeader}>
         <View style={styles.statCard}>
-          <Text style={[styles.statNumber, { color: COLORS.EMERGENCY }]}>{counts.active}</Text>
+          <Text style={[styles.statNumber, { color: COLORS.EMERGENCY }]}>{counts.pending}</Text>
           <Text style={styles.statLabel}>Active</Text>
         </View>
         <View style={styles.statCard}>
-          <Text style={[styles.statNumber, { color: COLORS.WARNING }]}>{counts.responding}</Text>
-          <Text style={styles.statLabel}>Responding</Text>
+          <Text style={[styles.statNumber, { color: COLORS.WARNING }]}>{counts.assigned}</Text>
+          <Text style={styles.statLabel}>Assigned</Text>
         </View>
         <View style={styles.statCard}>
-          <Text style={[styles.statNumber, { color: COLORS.SUCCESS }]}>{counts.resolved}</Text>
+          <Text style={[styles.statNumber, { color: COLORS.INFO }]}>{counts.in_progress}</Text>
+          <Text style={styles.statLabel}>In Progress</Text>
+        </View>
+        <View style={styles.statCard}>
+          <Text style={[styles.statNumber, { color: COLORS.SUCCESS }]}>{counts.completed}</Text>
           <Text style={styles.statLabel}>Resolved</Text>
-        </View>
-        <View style={styles.statCard}>
-          <Text style={styles.statNumber}>{counts.all}</Text>
-          <Text style={styles.statLabel}>Total</Text>
         </View>
       </View>
 
@@ -393,25 +465,32 @@ const SOSManagementScreen = ({ navigation }) => {
             onPress={() => setFilterStatus('all')}
           />
           <FilterButton
-            status="active"
+            status={EMERGENCY_STATUS.PENDING}
             title="Active"
-            count={counts.active}
-            active={filterStatus === 'active'}
-            onPress={() => setFilterStatus('active')}
+            count={counts.pending}
+            active={filterStatus === EMERGENCY_STATUS.PENDING}
+            onPress={() => setFilterStatus(EMERGENCY_STATUS.PENDING)}
           />
           <FilterButton
-            status="responding"
-            title="Responding"
-            count={counts.responding}
-            active={filterStatus === 'responding'}
-            onPress={() => setFilterStatus('responding')}
+            status={EMERGENCY_STATUS.ASSIGNED}
+            title="Assigned"
+            count={counts.assigned}
+            active={filterStatus === EMERGENCY_STATUS.ASSIGNED}
+            onPress={() => setFilterStatus(EMERGENCY_STATUS.ASSIGNED)}
           />
           <FilterButton
-            status="resolved"
+            status={EMERGENCY_STATUS.IN_PROGRESS}
+            title="In Progress"
+            count={counts.in_progress}
+            active={filterStatus === EMERGENCY_STATUS.IN_PROGRESS}
+            onPress={() => setFilterStatus(EMERGENCY_STATUS.IN_PROGRESS)}
+          />
+          <FilterButton
+            status={EMERGENCY_STATUS.COMPLETED}
             title="Resolved"
-            count={counts.resolved}
-            active={filterStatus === 'resolved'}
-            onPress={() => setFilterStatus('resolved')}
+            count={counts.completed}
+            active={filterStatus === EMERGENCY_STATUS.COMPLETED}
+            onPress={() => setFilterStatus(EMERGENCY_STATUS.COMPLETED)}
           />
         </ScrollView>
       </View>
@@ -440,66 +519,6 @@ const SOSManagementScreen = ({ navigation }) => {
     </SafeAreaView>
   );
 };
-
-// Mock emergency data
-const mockEmergencies = [
-  {
-    id: 'EMG001',
-    patientName: 'John Doe',
-    phone: '+1 (555) 123-4567',
-    age: 45,
-    medicalHistory: 'Hypertension, No known allergies',
-    type: 'Medical Emergency',
-    priority: 'critical',
-    status: 'active',
-    location: '123 Main St, Downtown',
-    description: 'Chest pain, difficulty breathing. Patient conscious and responsive.',
-    timestamp: '2024-03-15 10:30 AM',
-    coordinates: { lat: 40.7128, lng: -74.0060 }
-  },
-  {
-    id: 'EMG002',
-    patientName: 'Sarah Wilson',
-    phone: '+1 (555) 234-5678',
-    age: 32,
-    medicalHistory: 'No significant medical history',
-    type: 'Traffic Accident',
-    priority: 'high',
-    status: 'responding',
-    location: 'Highway 101, Mile 15',
-    description: 'Vehicle collision, multiple injuries reported. Fire department en route.',
-    timestamp: '2024-03-15 10:25 AM',
-    coordinates: { lat: 40.7580, lng: -73.9855 }
-  },
-  {
-    id: 'EMG003',
-    patientName: 'Mike Johnson',
-    phone: '+1 (555) 345-6789',
-    age: 28,
-    medicalHistory: 'Asthma',
-    type: 'Fire Emergency',
-    priority: 'critical',
-    status: 'active',
-    location: '456 Oak Avenue',
-    description: 'House fire, person trapped inside. Smoke inhalation suspected.',
-    timestamp: '2024-03-15 10:20 AM',
-    coordinates: { lat: 40.7589, lng: -73.9851 }
-  },
-  {
-    id: 'EMG004',
-    patientName: 'Lisa Brown',
-    phone: '+1 (555) 456-7890',
-    age: 67,
-    medicalHistory: 'Diabetes, Heart condition',
-    type: 'Medical Emergency',
-    priority: 'medium',
-    status: 'resolved',
-    location: '789 Pine Street',
-    description: 'Diabetic emergency, blood sugar levels stabilized.',
-    timestamp: '2024-03-15 09:45 AM',
-    coordinates: { lat: 40.7505, lng: -73.9934 }
-  }
-];
 
 const styles = StyleSheet.create({
   container: {

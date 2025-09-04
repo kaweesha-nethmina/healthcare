@@ -6,10 +6,12 @@ import {
   SafeAreaView,
   ScrollView,
   TouchableOpacity,
-  Image,
   Alert
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useAuth } from '../context/AuthContext';
+import { doc, getDoc, collection, query, where, getDocs, orderBy } from 'firebase/firestore';
+import { db } from '../services/firebase';
 import {
   COLORS,
   FONT_SIZES,
@@ -19,11 +21,13 @@ import {
 import Card from '../components/Card';
 import Button from '../components/Button';
 
-const DoctorProfileScreen = ({ navigation, route }) => {
+const DoctorProfileScreen = ({ route, navigation }) => {
   const { doctor } = route.params || {};
-  const [doctorData, setDoctorData] = useState(doctor || null);
+  const { userProfile } = useAuth();
+  const [doctorData, setDoctorData] = useState(null);
   const [reviews, setReviews] = useState([]);
-  const [selectedTab, setSelectedTab] = useState('about'); // about, reviews, schedule
+  const [selectedTab, setSelectedTab] = useState('about');
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (doctor) {
@@ -34,24 +38,100 @@ const DoctorProfileScreen = ({ navigation, route }) => {
 
   const loadDoctorDetails = async (doctorId) => {
     try {
-      // In a real app, fetch detailed doctor info from Firebase
-      // For now, using enhanced mock data
-      const enhancedDoctor = {
-        ...doctor,
-        ...mockDoctorDetails
-      };
-      setDoctorData(enhancedDoctor);
+      setLoading(true);
+      
+      // Fetch doctor details from Firebase
+      const doctorDocRef = doc(db, 'users', doctorId);
+      const doctorDoc = await getDoc(doctorDocRef);
+      
+      if (doctorDoc.exists()) {
+        const data = doctorDoc.data();
+        const doctorDetails = {
+          id: doctorDoc.id,
+          uid: doctorDoc.id,
+          name: `${data.firstName || ''} ${data.lastName || ''}`.trim() || 'Doctor',
+          specialization: data.specialization || 'General Practitioner',
+          rating: 0, // Will be updated from actual reviews
+          reviewCount: 0, // Will be updated from actual reviews
+          experience: data.experience || 5,
+          location: data.address || 'Medical Center',
+          consultationFee: data.consultationFee || 100,
+          availableNow: data.availableNow || false,
+          phone: data.phone || '',
+          email: data.email || '',
+          licenseNumber: data.licenseNumber || '',
+          languages: data.languages || ['en'],
+          about: data.about || `Experienced ${data.specialization || 'healthcare'} professional dedicated to providing comprehensive medical care.`,
+          patients: data.patients || '500+'
+        };
+        
+        setDoctorData(doctorDetails);
+      } else {
+        console.error('Doctor not found');
+      }
+      
+      setLoading(false);
     } catch (error) {
       console.error('Error loading doctor details:', error);
+      setLoading(false);
     }
   };
 
   const loadDoctorReviews = async (doctorId) => {
     try {
-      // In a real app, fetch reviews from Firebase
-      setReviews(mockReviews);
+      // Fetch reviews from Firebase
+      // Removed orderBy to avoid composite index requirement
+      const reviewsQuery = query(
+        collection(db, 'users', doctorId, 'reviews')
+        // Removed orderBy('createdAt', 'desc') to avoid composite index
+      );
+      
+      const reviewsSnapshot = await getDocs(reviewsQuery);
+      const reviewsData = reviewsSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data(),
+        // Format the date for display
+        date: doc.data().createdAt?.toDate ? 
+          doc.data().createdAt.toDate().toLocaleDateString() : 
+          new Date().toLocaleDateString()
+      }));
+      
+      // Sort in memory instead of using Firestore orderBy
+      reviewsData.sort((a, b) => {
+        const dateA = a.createdAt ? (typeof a.createdAt.toDate === 'function' ? a.createdAt.toDate() : a.createdAt) : new Date(0);
+        const dateB = b.createdAt ? (typeof b.createdAt.toDate === 'function' ? b.createdAt.toDate() : b.createdAt) : new Date(0);
+        return new Date(dateB) - new Date(dateA);
+      });
+      
+      setReviews(reviewsData);
+      
+      // Update doctor's rating based on reviews
+      if (reviewsData.length > 0) {
+        const totalRating = reviewsData.reduce((sum, review) => sum + review.rating, 0);
+        const averageRating = Math.round((totalRating / reviewsData.length) * 10) / 10;
+        
+        setDoctorData(prev => ({
+          ...prev,
+          rating: averageRating,
+          reviewCount: reviewsData.length
+        }));
+      } else {
+        // Set default values if no reviews
+        setDoctorData(prev => ({
+          ...prev,
+          rating: 0,
+          reviewCount: 0
+        }));
+      }
     } catch (error) {
       console.error('Error loading reviews:', error);
+      // Set default values if there's an error
+      setReviews([]);
+      setDoctorData(prev => ({
+        ...prev,
+        rating: 0,
+        reviewCount: 0
+      }));
     }
   };
 
@@ -121,6 +201,16 @@ const DoctorProfileScreen = ({ navigation, route }) => {
       </Text>
     </TouchableOpacity>
   );
+
+  if (loading) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.errorContainer}>
+          <Text style={styles.errorText}>Loading...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   if (!doctorData) {
     return (
@@ -230,7 +320,7 @@ const DoctorProfileScreen = ({ navigation, route }) => {
             </Text>
 
             <Text style={styles.sectionTitle}>Education & Certifications</Text>
-            {(doctorData.education || mockEducation).map((item, index) => (
+            {(doctorData.education || []).map((item, index) => (
               <View key={index} style={styles.educationItem}>
                 <Ionicons name="school" size={16} color={COLORS.PRIMARY} />
                 <View style={styles.educationText}>
@@ -295,48 +385,6 @@ const DoctorProfileScreen = ({ navigation, route }) => {
     </SafeAreaView>
   );
 };
-
-// Mock data
-const mockDoctorDetails = {
-  about: 'Experienced healthcare professional dedicated to providing comprehensive medical care.',
-  patients: '500+',
-  languages: ['English', 'Spanish']
-};
-
-const mockEducation = [
-  {
-    degree: 'Doctor of Medicine (MD)',
-    institution: 'Harvard Medical School'
-  },
-  {
-    degree: 'Board Certified Internal Medicine',
-    institution: 'American Board of Internal Medicine'
-  }
-];
-
-const mockReviews = [
-  {
-    id: '1',
-    patientName: 'John Smith',
-    rating: 5,
-    date: 'March 15, 2024',
-    comment: 'Excellent doctor! Very thorough and caring. Took time to explain everything clearly.'
-  },
-  {
-    id: '2',
-    patientName: 'Sarah Johnson',
-    rating: 4,
-    date: 'March 10, 2024',
-    comment: 'Great experience. Professional and knowledgeable. Would recommend to others.'
-  },
-  {
-    id: '3',
-    patientName: 'Mike Davis',
-    rating: 5,
-    date: 'March 5, 2024',
-    comment: 'Outstanding service. Dr. was very patient and answered all my questions.'
-  }
-];
 
 const styles = StyleSheet.create({
   container: {

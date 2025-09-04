@@ -39,47 +39,7 @@ const DoctorProfileScreen = ({ navigation }) => {
     try {
       // In a real app, fetch from Firebase
       // For now, using enhanced user profile with doctor-specific data
-      const mockDoctorData = {
-        ...userProfile,
-        specialization: userProfile?.specialization || 'Internal Medicine',
-        licenseNumber: 'MD123456789',
-        yearsOfExperience: 8,
-        education: [
-          'MD - Harvard Medical School (2016)',
-          'Residency - Johns Hopkins Hospital (2020)',
-          'Fellowship - Mayo Clinic (2022)'
-        ],
-        certifications: [
-          'Board Certified Internal Medicine',
-          'Advanced Cardiac Life Support (ACLS)',
-          'Basic Life Support (BLS)'
-        ],
-        languages: ['English', 'Spanish', 'French'],
-        hospitalAffiliations: [
-          'General Hospital Medical Center',
-          'City Medical Institute'
-        ],
-        consultationFee: 150,
-        availability: {
-          monday: '9:00 AM - 5:00 PM',
-          tuesday: '9:00 AM - 5:00 PM',
-          wednesday: '9:00 AM - 5:00 PM',
-          thursday: '9:00 AM - 5:00 PM',
-          friday: '9:00 AM - 3:00 PM',
-          saturday: '10:00 AM - 2:00 PM',
-          sunday: 'Closed'
-        },
-        rating: 4.8,
-        totalPatients: 156,
-        totalConsultations: 342,
-        bio: 'Experienced physician specializing in internal medicine with a focus on preventive care and chronic disease management.',
-        achievements: [
-          'Top Rated Doctor 2023',
-          'Excellence in Patient Care Award',
-          'Research Publication in NEJM'
-        ]
-      };
-      setDoctorData(mockDoctorData);
+      setDoctorData(userProfile);
     } catch (error) {
       console.error('Error loading doctor profile:', error);
     }

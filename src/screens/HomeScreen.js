@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -10,12 +10,99 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import Card from '../components/Card';
 import { useAuth } from '../context/AuthContext';
-import { COLORS, FONT_SIZES, SPACING } from '../constants';
+import { COLORS, FONT_SIZES, SPACING, BORDER_RADIUS } from '../constants';
 import useNotifications from '../hooks/useNotifications';
+import { collection, query, where, getDocs, orderBy, limit } from 'firebase/firestore';
+import { db } from '../services/firebase';
 
 const HomeScreen = ({ navigation }) => {
   const { userProfile, isPatient, isDoctor, isEmergencyOperator } = useAuth();
   const { unreadCount } = useNotifications({ autoRefresh: true });
+  const [recentChats, setRecentChats] = useState([]);
+  const [loadingChats, setLoadingChats] = useState(false);
+
+  // Fetch recent chats when screen loads
+  useEffect(() => {
+    if (isPatient && userProfile?.uid) {
+      fetchRecentChats();
+    }
+  }, [userProfile]);
+
+  // Function to fetch recent chats
+  const fetchRecentChats = async () => {
+    if (!userProfile?.uid) return;
+    
+    setLoadingChats(true);
+    try {
+      // First try to get chats from the chatMetadata collection
+      const chatMetadataQuery = query(
+        collection(db, 'chatMetadata'),
+        where('patientId', '==', userProfile.uid),
+        limit(5)
+      );
+      
+      const chatMetadataSnapshot = await getDocs(chatMetadataQuery);
+      
+      if (!chatMetadataSnapshot.empty) {
+        const chatsData = [];
+        chatMetadataSnapshot.forEach((doc) => {
+          const data = doc.data();
+          chatsData.push({
+            id: doc.id,
+            doctorId: data.doctorId,
+            doctorName: data.doctorName || 'Doctor',
+            lastMessage: data.lastMessage || 'Start a conversation',
+            lastUpdated: data.lastUpdated ? new Date(data.lastUpdated.toDate?.() || data.lastUpdated) : new Date(),
+          });
+        });
+        
+        // Sort by last updated time
+        chatsData.sort((a, b) => b.lastUpdated - a.lastUpdated);
+        setRecentChats(chatsData);
+      } else {
+        // If no chat metadata, fall back to querying messages collection
+        const messagesQuery = query(
+          collection(db, 'messages'),
+          where('patientId', '==', userProfile.uid),
+          limit(20)
+        );
+        
+        const messagesSnapshot = await getDocs(messagesQuery);
+        
+        // Process messages to find unique chats
+        const chatsMap = new Map();
+        
+        messagesSnapshot.forEach((doc) => {
+          const data = doc.data();
+          const chatId = data.chatId || `${data.doctorId}_${userProfile.uid}`;
+          
+          // Only add if this is a doctor-patient chat
+          if (data.doctorId && data.doctorName) {
+            if (!chatsMap.has(chatId) || 
+                new Date(data.timestamp?.toDate?.() || data.timestamp) > 
+                new Date(chatsMap.get(chatId).lastUpdated)) {
+              chatsMap.set(chatId, {
+                id: chatId,
+                doctorId: data.doctorId,
+                doctorName: data.doctorName,
+                lastMessage: data.text || 'New message',
+                lastUpdated: data.timestamp ? new Date(data.timestamp.toDate?.() || data.timestamp) : new Date(),
+              });
+            }
+          }
+        });
+        
+        const chatsData = Array.from(chatsMap.values());
+        // Sort by last updated time
+        chatsData.sort((a, b) => b.lastUpdated - a.lastUpdated);
+        setRecentChats(chatsData.slice(0, 5));
+      }
+    } catch (error) {
+      console.error('Error fetching recent chats:', error);
+    } finally {
+      setLoadingChats(false);
+    }
+  };
 
   const quickActions = [
     {
@@ -35,6 +122,14 @@ const HomeScreen = ({ navigation }) => {
       show: isPatient
     },
     {
+      title: 'Chat with Doctors',
+      subtitle: 'Message your doctor',
+      icon: 'chatbubble',
+      color: COLORS.ACCENT,
+      onPress: () => navigation.navigate('Consultation', { screen: 'DoctorList', params: { chatMode: true } }),
+      show: isPatient
+    },
+    {
       title: 'Health Records',
       subtitle: 'View your history',
       icon: 'folder',
@@ -49,6 +144,14 @@ const HomeScreen = ({ navigation }) => {
       color: COLORS.INFO,
       onPress: () => navigation.navigate('FirstAid'),
       show: true
+    },
+    {
+      title: 'Health Assistant',
+      subtitle: 'Symptom checker',
+      icon: 'bar-chart',
+      color: COLORS.INFO,
+      onPress: () => navigation.navigate('AIHealthAssistant'),
+      show: isPatient
     }
   ];
 
@@ -109,6 +212,67 @@ const HomeScreen = ({ navigation }) => {
               {quickActions.map(renderQuickAction)}
             </View>
           </View>
+
+          {/* Recent Chats Section - Only visible for patients */}
+          {isPatient && (
+            <View style={styles.section}>
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionTitle}>Recent Chats</Text>
+                <TouchableOpacity onPress={() => navigation.navigate('Consultation', { screen: 'DoctorList', params: { chatMode: true } })}>
+                  <Text style={styles.seeAllText}>See All</Text>
+                </TouchableOpacity>
+              </View>
+              
+              {loadingChats ? (
+                <Card style={styles.loadingCard}>
+                  <Text style={styles.loadingText}>Loading recent chats...</Text>
+                </Card>
+              ) : recentChats.length > 0 ? (
+                recentChats.map((chat) => (
+                  <TouchableOpacity 
+                    key={chat.id} 
+                    onPress={() => navigation.navigate('Consultation', {
+                      screen: 'Chat',
+                      params: {
+                        doctorId: chat.doctorId,
+                        doctorName: chat.doctorName,
+                        patientId: userProfile.uid,
+                        patientName: `${userProfile.firstName || ''} ${userProfile.lastName || ''}`.trim() || 'Patient',
+                        // Ensure we have a chatId for direct messaging
+                        chatId: chat.id
+                      }
+                    })}
+                  >
+                    <Card style={styles.chatCard}>
+                      <View style={styles.chatCardContent}>
+                        <View style={styles.chatIcon}>
+                          <Ionicons name="person" size={24} color={COLORS.WHITE} />
+                        </View>
+                        <View style={styles.chatInfo}>
+                          <Text style={styles.doctorName}>{chat.doctorName}</Text>
+                          <Text style={styles.lastMessage} numberOfLines={1}>{chat.lastMessage}</Text>
+                        </View>
+                        <Ionicons name="chevron-forward" size={20} color={COLORS.GRAY_MEDIUM} />
+                      </View>
+                    </Card>
+                  </TouchableOpacity>
+                ))
+              ) : (
+                <Card style={styles.emptyChatCard}>
+                  <View style={styles.emptyChatContent}>
+                    <Ionicons name="chatbubble-outline" size={36} color={COLORS.GRAY_MEDIUM} />
+                    <Text style={styles.emptyChatText}>No recent chats</Text>
+                    <TouchableOpacity 
+                      style={styles.startChatButton}
+                      onPress={() => navigation.navigate('Consultation', { screen: 'DoctorList', params: { chatMode: true } })}
+                    >
+                      <Text style={styles.startChatButtonText}>Start a Chat</Text>
+                    </TouchableOpacity>
+                  </View>
+                </Card>
+              )}
+            </View>
+          )}
 
           {/* Recent Activity */}
           <View style={styles.section}>
@@ -211,6 +375,17 @@ const styles = StyleSheet.create({
     color: COLORS.TEXT_PRIMARY,
     marginBottom: SPACING.MD,
   },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: SPACING.MD,
+  },
+  seeAllText: {
+    fontSize: FONT_SIZES.SM,
+    color: COLORS.PRIMARY,
+    fontWeight: '600',
+  },
   quickActionsGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -279,6 +454,68 @@ const styles = StyleSheet.create({
     color: COLORS.TEXT_SECONDARY,
     lineHeight: 20,
   },
+  // Chat card styles
+  loadingCard: {
+    paddingVertical: SPACING.MD,
+    alignItems: 'center',
+  },
+  loadingText: {
+    fontSize: FONT_SIZES.MD,
+    color: COLORS.TEXT_SECONDARY,
+  },
+  chatCard: {
+    marginBottom: SPACING.MD,
+  },
+  chatCardContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: SPACING.MD,
+  },
+  chatIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: COLORS.PRIMARY,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: SPACING.MD,
+  },
+  chatInfo: {
+    flex: 1,
+  },
+  doctorName: {
+    fontSize: FONT_SIZES.MD,
+    fontWeight: '600',
+    color: COLORS.TEXT_PRIMARY,
+    marginBottom: SPACING.XS / 2,
+  },
+  lastMessage: {
+    fontSize: FONT_SIZES.SM,
+    color: COLORS.TEXT_SECONDARY,
+  },
+  emptyChatCard: {
+    paddingVertical: SPACING.XL,
+  },
+  emptyChatContent: {
+    alignItems: 'center',
+  },
+  emptyChatText: {
+    fontSize: FONT_SIZES.MD,
+    color: COLORS.TEXT_SECONDARY,
+    marginTop: SPACING.MD,
+    marginBottom: SPACING.MD,
+  },
+  startChatButton: {
+    backgroundColor: COLORS.PRIMARY,
+    paddingHorizontal: SPACING.LG,
+    paddingVertical: SPACING.SM,
+    borderRadius: BORDER_RADIUS.SM,
+  },
+  startChatButtonText: {
+    fontSize: FONT_SIZES.SM,
+    color: COLORS.WHITE,
+    fontWeight: '600',
+  }
 });
 
 export default HomeScreen;

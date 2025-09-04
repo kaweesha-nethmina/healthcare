@@ -23,7 +23,7 @@ import Card from '../components/Card';
 import useNotifications from '../hooks/useNotifications';
 
 const NotificationsScreen = ({ navigation }) => {
-  const { user } = useAuth();
+  const { user, userProfile } = useAuth();
   const [filter, setFilter] = useState('all'); // all, unread, appointment, health
   
   // Use the custom notifications hook
@@ -101,9 +101,24 @@ const NotificationsScreen = ({ navigation }) => {
         navigation.navigate('Consultation');
         break;
       case NOTIFICATION_TYPES.CONSULTATION:
-        navigation.navigate('Chat', { 
-          doctorId: notification.data?.doctorId,
-          doctorName: notification.data?.doctorName 
+        // For chat notifications, we need to determine the correct navigation based on user role
+        const { doctorId, patientId, doctorName, patientName } = notification.data || {};
+        
+        // Validate required parameters
+        if (!doctorId || !patientId) {
+          console.warn('Missing required parameters for chat notification');
+          navigation.navigate('Consultation');
+          return;
+        }
+        
+        navigation.navigate('Consultation', { 
+          screen: 'Chat',
+          params: {
+            doctorId,
+            doctorName: doctorName || 'Doctor',
+            patientId,
+            patientName: patientName || 'Patient'
+          }
         });
         break;
       case NOTIFICATION_TYPES.REMINDER:
@@ -319,64 +334,6 @@ const getTimeAgo = (timestamp) => {
   if (diffInSeconds < 604800) return `${Math.floor(diffInSeconds / 86400)}d ago`;
   return notificationTime.toLocaleDateString();
 };
-
-// Mock notifications data
-const mockNotifications = [
-  {
-    id: '1',
-    title: 'Appointment Reminder',
-    message: 'Your appointment with Dr. Sarah Johnson is tomorrow at 10:00 AM',
-    type: NOTIFICATION_TYPES.APPOINTMENT,
-    timestamp: new Date(Date.now() - 3600000).toISOString(), // 1 hour ago
-    read: false,
-    data: { doctorId: 'doc_1', appointmentId: 'apt_1' }
-  },
-  {
-    id: '2',
-    title: 'New Message',
-    message: 'Dr. Michael Chen sent you a message about your test results',
-    type: NOTIFICATION_TYPES.CONSULTATION,
-    timestamp: new Date(Date.now() - 7200000).toISOString(), // 2 hours ago
-    read: false,
-    data: { doctorId: 'doc_2', doctorName: 'Dr. Michael Chen' }
-  },
-  {
-    id: '3',
-    title: 'Medication Reminder',
-    message: 'Time to take your Lisinopril (10mg)',
-    type: NOTIFICATION_TYPES.REMINDER,
-    timestamp: new Date(Date.now() - 10800000).toISOString(), // 3 hours ago
-    read: true,
-    data: { medication: 'Lisinopril', dosage: '10mg' }
-  },
-  {
-    id: '4',
-    title: 'Health Tip',
-    message: 'Stay hydrated! Remember to drink at least 8 glasses of water daily',
-    type: NOTIFICATION_TYPES.HEALTH_TIP,
-    timestamp: new Date(Date.now() - 86400000).toISOString(), // 1 day ago
-    read: true,
-    data: {}
-  },
-  {
-    id: '5',
-    title: 'Lab Results Available',
-    message: 'Your blood test results are now available in your health records',
-    type: NOTIFICATION_TYPES.HEALTH_TIP,
-    timestamp: new Date(Date.now() - 172800000).toISOString(), // 2 days ago
-    read: true,
-    data: { reportId: 'lab_001' }
-  },
-  {
-    id: '6',
-    title: 'Appointment Confirmed',
-    message: 'Your appointment with Dr. Emily Rodriguez has been confirmed for March 25th',
-    type: NOTIFICATION_TYPES.APPOINTMENT,
-    timestamp: new Date(Date.now() - 259200000).toISOString(), // 3 days ago
-    read: true,
-    data: { doctorId: 'doc_3', appointmentId: 'apt_2' }
-  }
-];
 
 const styles = StyleSheet.create({
   container: {

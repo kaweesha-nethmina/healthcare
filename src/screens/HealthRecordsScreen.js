@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -6,48 +6,247 @@ import {
   SafeAreaView,
   ScrollView,
   TouchableOpacity,
-  Alert,
-  ActivityIndicator
+  ActivityIndicator,
+  Alert
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
 import {
+  collection,
+  query,
+  where,
+  getDocs,
+  onSnapshot,
+  orderBy
+} from 'firebase/firestore';
+import { db } from '../services/firebase';
+import {
   COLORS,
   FONT_SIZES,
   SPACING,
-  BORDER_RADIUS
+  BORDER_RADIUS,
+  CONSULTATION_STATUS
 } from '../constants';
 import Card from '../components/Card';
 import Button from '../components/Button';
-import { collection, query, where, getDocs, orderBy } from 'firebase/firestore';
-import { db } from '../services/firebase';
 
 const HealthRecordsScreen = ({ navigation }) => {
   const { user, userProfile } = useAuth();
   const [healthData, setHealthData] = useState({
-    recentDocuments: [],
+    appointments: [],
     prescriptions: [],
-    vitals: [],
-    appointments: []
+    recentDocuments: [],
+    vitals: {}
   });
   const [loading, setLoading] = useState(true);
+  const appointmentsListenerRef = useRef(null);
+  const prescriptionsListenerRef = useRef(null);
+  const documentsListenerRef = useRef(null);
 
   useEffect(() => {
-    loadHealthRecords();
+    loadHealthData();
+    const unsubscribeAppointments = setupAppointmentsListener();
+    const unsubscribePrescriptions = setupPrescriptionsListener();
+    const unsubscribeDocuments = setupDocumentsListener();
+    
+    return () => {
+      if (unsubscribeAppointments) unsubscribeAppointments();
+      if (unsubscribePrescriptions) unsubscribePrescriptions();
+      if (unsubscribeDocuments) unsubscribeDocuments();
+    };
   }, []);
 
-  const loadHealthRecords = async () => {
+  const setupAppointmentsListener = () => {
+    try {
+      // Listen for user's appointments in real-time
+      // Removed orderBy to avoid composite index requirement
+      const appointmentsQuery = query(
+        collection(db, 'appointments'),
+        where('patientId', '==', user.uid)
+        // Removed orderBy('appointmentDate', 'desc') to avoid composite index
+      );
+      
+      return onSnapshot(appointmentsQuery, (snapshot) => {
+        const appointmentsData = [];
+        snapshot.forEach((doc) => {
+          const data = doc.data();
+          appointmentsData.push({
+            id: doc.id,
+            ...data
+          });
+        });
+        
+        // Sort in memory instead of using Firestore orderBy
+        appointmentsData.sort((a, b) => new Date(b.appointmentDate) - new Date(a.appointmentDate));
+        
+        setHealthData(prev => ({
+          ...prev,
+          appointments: appointmentsData
+        }));
+      }, (error) => {
+        console.error('Error listening to appointments:', error);
+      });
+    } catch (error) {
+      console.error('Error setting up appointments listener:', error);
+      return null;
+    }
+  };
+
+  const setupPrescriptionsListener = () => {
+    try {
+      // Listen for user's prescriptions in real-time
+      // Removed orderBy to avoid composite index requirement
+      const prescriptionsQuery = query(
+        collection(db, 'prescriptions'),
+        where('patientId', '==', user.uid)
+        // Removed orderBy('createdAt', 'desc') to avoid composite index
+      );
+      
+      return onSnapshot(prescriptionsQuery, (snapshot) => {
+        const prescriptionsData = [];
+        snapshot.forEach((doc) => {
+          const data = doc.data();
+          prescriptionsData.push({
+            id: doc.id,
+            ...data
+          });
+        });
+        
+        // Sort in memory instead of using Firestore orderBy
+        prescriptionsData.sort((a, b) => {
+          const dateA = a.createdAt ? (typeof a.createdAt.toDate === 'function' ? a.createdAt.toDate() : a.createdAt) : new Date(0);
+          const dateB = b.createdAt ? (typeof b.createdAt.toDate === 'function' ? b.createdAt.toDate() : b.createdAt) : new Date(0);
+          return new Date(dateB) - new Date(dateA);
+        });
+        
+        setHealthData(prev => ({
+          ...prev,
+          prescriptions: prescriptionsData
+        }));
+      }, (error) => {
+        console.error('Error listening to prescriptions:', error);
+      });
+    } catch (error) {
+      console.error('Error setting up prescriptions listener:', error);
+      return null;
+    }
+  };
+
+  const setupDocumentsListener = () => {
+    try {
+      // Listen for user's documents in real-time
+      // Removed orderBy to avoid composite index requirement
+      const documentsQuery = query(
+        collection(db, 'users', user.uid, 'documents')
+        // Removed orderBy('uploadDate', 'desc') to avoid composite index
+      );
+      
+      return onSnapshot(documentsQuery, (snapshot) => {
+        const documentsData = [];
+        snapshot.forEach((doc) => {
+          const data = doc.data();
+          documentsData.push({
+            id: doc.id,
+            ...data
+          });
+        });
+        
+        // Sort in memory instead of using Firestore orderBy
+        documentsData.sort((a, b) => new Date(b.uploadDate) - new Date(a.uploadDate));
+        
+        setHealthData(prev => ({
+          ...prev,
+          recentDocuments: documentsData.slice(0, 5) // Show only first 5 documents
+        }));
+      }, (error) => {
+        console.error('Error listening to documents:', error);
+      });
+    } catch (error) {
+      console.error('Error setting up documents listener:', error);
+      return null;
+    }
+  };
+
+  const loadHealthData = async () => {
     try {
       setLoading(true);
-      // In a real app, we would fetch from Firebase
-      // For now, using mock data
-      setTimeout(() => {
-        setHealthData(mockHealthData);
-        setLoading(false);
-      }, 1000);
+      
+      // Load appointments
+      // Removed orderBy to avoid composite index requirement
+      const appointmentsQuery = query(
+        collection(db, 'appointments'),
+        where('patientId', '==', user.uid)
+        // Removed orderBy('appointmentDate', 'desc') to avoid composite index
+      );
+      
+      const appointmentsSnapshot = await getDocs(appointmentsQuery);
+      const appointmentsData = [];
+      appointmentsSnapshot.forEach((doc) => {
+        const data = doc.data();
+        appointmentsData.push({
+          id: doc.id,
+          ...data
+        });
+      });
+      
+      // Sort in memory instead of using Firestore orderBy
+      appointmentsData.sort((a, b) => new Date(b.appointmentDate) - new Date(a.appointmentDate));
+      
+      // Load prescriptions
+      // Removed orderBy to avoid composite index requirement
+      const prescriptionsQuery = query(
+        collection(db, 'prescriptions'),
+        where('patientId', '==', user.uid)
+        // Removed orderBy('createdAt', 'desc') to avoid composite index
+      );
+      
+      const prescriptionsSnapshot = await getDocs(prescriptionsQuery);
+      const prescriptionsData = [];
+      prescriptionsSnapshot.forEach((doc) => {
+        const data = doc.data();
+        prescriptionsData.push({
+          id: doc.id,
+          ...data
+        });
+      });
+      
+      // Sort in memory instead of using Firestore orderBy
+      prescriptionsData.sort((a, b) => {
+        const dateA = a.createdAt ? (typeof a.createdAt.toDate === 'function' ? a.createdAt.toDate() : a.createdAt) : new Date(0);
+        const dateB = b.createdAt ? (typeof b.createdAt.toDate === 'function' ? b.createdAt.toDate() : b.createdAt) : new Date(0);
+        return new Date(dateB) - new Date(dateA);
+      });
+      
+      // Load documents
+      // Removed orderBy to avoid composite index requirement
+      const documentsQuery = query(
+        collection(db, 'users', user.uid, 'documents')
+        // Removed orderBy('uploadDate', 'desc') to avoid composite index
+      );
+      
+      const documentsSnapshot = await getDocs(documentsQuery);
+      const documentsData = [];
+      documentsSnapshot.forEach((doc) => {
+        const data = doc.data();
+        documentsData.push({
+          id: doc.id,
+          ...data
+        });
+      });
+      
+      // Sort in memory instead of using Firestore orderBy
+      documentsData.sort((a, b) => new Date(b.uploadDate) - new Date(a.uploadDate));
+      
+      setHealthData({
+        appointments: appointmentsData,
+        prescriptions: prescriptionsData,
+        recentDocuments: documentsData.slice(0, 5), // Show only first 5 documents
+        vitals: {} // Will be populated from other sources
+      });
+      
+      setLoading(false);
     } catch (error) {
       console.error('Error loading health records:', error);
-      setHealthData(mockHealthData);
       setLoading(false);
     }
   };
@@ -253,63 +452,7 @@ const HealthRecordsScreen = ({ navigation }) => {
   );
 };
 
-// Mock data for demonstration
-const mockHealthData = {
-  recentDocuments: [
-    {
-      id: '1',
-      name: 'Blood Test Results',
-      type: 'pdf',
-      date: 'March 20, 2024',
-      size: '2.1 MB'
-    },
-    {
-      id: '2',
-      name: 'X-Ray Chest',
-      type: 'image',
-      date: 'March 15, 2024',
-      size: '5.3 MB'
-    },
-    {
-      id: '3',
-      name: 'Prescription',
-      type: 'pdf',
-      date: 'March 10, 2024',
-      size: '0.8 MB'
-    }
-  ],
-  prescriptions: [
-    {
-      id: '1',
-      medication: 'Lisinopril',
-      dosage: '10mg',
-      frequency: 'Once daily',
-      doctor: 'Dr. Sarah Johnson',
-      status: 'active'
-    },
-    {
-      id: '2',
-      medication: 'Metformin',
-      dosage: '500mg',
-      frequency: 'Twice daily',
-      doctor: 'Dr. Michael Chen',
-      status: 'active'
-    },
-    {
-      id: '3',
-      medication: 'Ibuprofen',
-      dosage: '200mg',
-      frequency: 'As needed',
-      doctor: 'Dr. Sarah Johnson',
-      status: 'completed'
-    }
-  ],
-  appointments: [
-    { id: '1', date: '2024-03-20', type: 'Checkup' },
-    { id: '2', date: '2024-02-15', type: 'Blood Test' },
-    { id: '3', date: '2024-01-10', type: 'Consultation' }
-  ]
-};
+
 
 const styles = StyleSheet.create({
   container: {

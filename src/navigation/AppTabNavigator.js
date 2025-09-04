@@ -21,6 +21,9 @@ import SettingsScreen from '../screens/SettingsScreen';
 import UploadDocumentScreen from '../screens/UploadDocumentScreen';
 import PrescriptionScreen from '../screens/PrescriptionScreen';
 import FirstAidScreen from '../screens/FirstAidScreen';
+import AIHealthAssistantScreen from '../screens/AIHealthAssistantScreen';
+import TelemedicineScreen from '../screens/TelemedicineScreen';
+import PatientAppointmentsScreen from '../screens/PatientAppointmentsScreen';
 
 // Emergency Related Screens
 import SOSScreen from '../screens/SOSScreen';
@@ -70,6 +73,11 @@ const HomeStackNavigator = () => (
       component={FirstAidScreen}
       options={{ title: 'First Aid Guide' }}
     />
+    <HomeStack.Screen 
+      name="AIHealthAssistant" 
+      component={AIHealthAssistantScreen}
+      options={{ title: 'AI Health Assistant' }}
+    />
   </HomeStack.Navigator>
 );
 
@@ -114,6 +122,16 @@ const ConsultationStackNavigator = () => (
       name="VideoCall" 
       component={VideoCallScreen}
       options={{ title: 'Video Consultation' }}
+    />
+    <ConsultationStack.Screen 
+      name="Telemedicine" 
+      component={TelemedicineScreen}
+      options={{ title: 'Telemedicine Tools' }}
+    />
+    <ConsultationStack.Screen 
+      name="PatientAppointments" 
+      component={PatientAppointmentsScreen}
+      options={{ title: 'My Appointments' }}
     />
   </ConsultationStack.Navigator>
 );

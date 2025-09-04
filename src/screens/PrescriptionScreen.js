@@ -35,19 +35,41 @@ const PrescriptionScreen = ({ navigation }) => {
 
   const loadPrescriptions = async () => {
     try {
-      // In a real app, fetch from Firebase
-      // For now, using mock data
-      setPrescriptions(mockPrescriptions);
-      
-      // Initialize reminder settings
-      const reminders = {};
-      mockPrescriptions.forEach(prescription => {
-        reminders[prescription.id] = prescription.reminderEnabled || false;
-      });
-      setReminderSettings(reminders);
+      // Fetch prescriptions from Firebase
+      if (user && user.uid) {
+        const prescriptionsQuery = query(
+          collection(db, 'prescriptions'),
+          where('patientId', '==', user.uid)
+          // Removed orderBy('createdAt', 'desc') to avoid composite index
+        );
+        
+        const prescriptionsSnapshot = await getDocs(prescriptionsQuery);
+        const prescriptionsData = [];
+        const reminders = {};
+        
+        prescriptionsSnapshot.forEach((doc) => {
+          const prescription = {
+            id: doc.id,
+            ...doc.data()
+          };
+          prescriptionsData.push(prescription);
+          
+          // Initialize reminder settings
+          reminders[prescription.id] = prescription.reminderEnabled || false;
+        });
+        
+        // Sort in memory instead of using Firestore orderBy
+        prescriptionsData.sort((a, b) => {
+          const dateA = a.createdAt ? (typeof a.createdAt.toDate === 'function' ? a.createdAt.toDate() : a.createdAt) : new Date(0);
+          const dateB = b.createdAt ? (typeof b.createdAt.toDate === 'function' ? b.createdAt.toDate() : b.createdAt) : new Date(0);
+          return new Date(dateB) - new Date(dateA);
+        });
+        
+        setPrescriptions(prescriptionsData);
+        setReminderSettings(reminders);
+      }
     } catch (error) {
       console.error('Error loading prescriptions:', error);
-      setPrescriptions(mockPrescriptions);
     }
   };
 
@@ -59,18 +81,27 @@ const PrescriptionScreen = ({ navigation }) => {
     setReminderSettings(newSettings);
     
     // Update prescription in database
-    setPrescriptions(prev =>
-      prev.map(p =>
-        p.id === prescriptionId
-          ? { ...p, reminderEnabled: newSettings[prescriptionId] }
-          : p
-      )
-    );
-    
-    Alert.alert(
-      'Reminder Updated',
-      `Medication reminder ${newSettings[prescriptionId] ? 'enabled' : 'disabled'}`
-    );
+    try {
+      await updateDoc(doc(db, 'prescriptions', prescriptionId), {
+        reminderEnabled: newSettings[prescriptionId]
+      });
+      
+      setPrescriptions(prev =>
+        prev.map(p =>
+          p.id === prescriptionId
+            ? { ...p, reminderEnabled: newSettings[prescriptionId] }
+            : p
+        )
+      );
+      
+      Alert.alert(
+        'Reminder Updated',
+        `Medication reminder ${newSettings[prescriptionId] ? 'enabled' : 'disabled'}`
+      );
+    } catch (error) {
+      console.error('Error updating reminder:', error);
+      Alert.alert('Error', 'Failed to update reminder settings');
+    }
   };
 
   const markAsTaken = (prescriptionId, doseTime) => {
@@ -81,22 +112,41 @@ const PrescriptionScreen = ({ navigation }) => {
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Yes',
-          onPress: () => {
-            // Update local state
-            setPrescriptions(prev =>
-              prev.map(p => {
-                if (p.id === prescriptionId) {
-                  const updatedDoses = [...p.doseTimes];
-                  const doseIndex = updatedDoses.findIndex(d => d.time === doseTime);
-                  if (doseIndex !== -1) {
-                    updatedDoses[doseIndex] = { ...updatedDoses[doseIndex], taken: true };
-                  }
-                  return { ...p, doseTimes: updatedDoses };
+          onPress: async () => {
+            try {
+              // Update in database
+              const prescriptionRef = doc(db, 'prescriptions', prescriptionId);
+              const prescriptionDoc = await getDoc(prescriptionRef);
+              
+              if (prescriptionDoc.exists()) {
+                const prescriptionData = prescriptionDoc.data();
+                const updatedDoses = [...(prescriptionData.doseTimes || [])];
+                const doseIndex = updatedDoses.findIndex(d => d.time === doseTime);
+                
+                if (doseIndex !== -1) {
+                  updatedDoses[doseIndex] = { ...updatedDoses[doseIndex], taken: true };
+                  
+                  await updateDoc(prescriptionRef, {
+                    doseTimes: updatedDoses
+                  });
+                  
+                  // Update local state
+                  setPrescriptions(prev =>
+                    prev.map(p => {
+                      if (p.id === prescriptionId) {
+                        return { ...p, doseTimes: updatedDoses };
+                      }
+                      return p;
+                    })
+                  );
+                  
+                  Alert.alert('Success', 'Medication marked as taken');
                 }
-                return p;
-              })
-            );
-            Alert.alert('Success', 'Medication marked as taken');
+              }
+            } catch (error) {
+              console.error('Error marking as taken:', error);
+              Alert.alert('Error', 'Failed to mark medication as taken');
+            }
           }
         }
       ]
@@ -384,66 +434,6 @@ const PrescriptionScreen = ({ navigation }) => {
     </SafeAreaView>
   );
 };
-
-// Mock prescriptions data
-const mockPrescriptions = [
-  {
-    id: '1',
-    medicationName: 'Lisinopril',
-    dosage: '10mg',
-    frequency: 'Once daily',
-    instructions: 'Take with or without food. Best taken in the morning.',
-    startDate: '2024-03-01',
-    endDate: '2024-06-01',
-    status: 'active',
-    doctorName: 'Dr. Sarah Johnson',
-    prescriptionDate: '2024-03-01',
-    nextDose: 'Tomorrow 8:00 AM',
-    reminderEnabled: true,
-    doseTimes: [
-      { time: '8:00 AM', taken: true },
-    ],
-    sideEffects: 'Dizziness, dry cough, headache',
-    notes: 'Monitor blood pressure weekly'
-  },
-  {
-    id: '2',
-    medicationName: 'Metformin',
-    dosage: '500mg',
-    frequency: 'Twice daily with meals',
-    instructions: 'Take with breakfast and dinner to reduce stomach upset.',
-    startDate: '2024-02-15',
-    endDate: '2024-05-15',
-    status: 'active',
-    doctorName: 'Dr. Michael Chen',
-    prescriptionDate: '2024-02-15',
-    nextDose: 'Today 6:00 PM',
-    reminderEnabled: false,
-    doseTimes: [
-      { time: '8:00 AM', taken: true },
-      { time: '6:00 PM', taken: false },
-    ],
-    sideEffects: 'Nausea, diarrhea, metallic taste',
-    notes: 'Check blood sugar levels regularly'
-  },
-  {
-    id: '3',
-    medicationName: 'Amoxicillin',
-    dosage: '250mg',
-    frequency: 'Three times daily',
-    instructions: 'Complete the full course even if feeling better.',
-    startDate: '2024-02-01',
-    endDate: '2024-02-10',
-    status: 'completed',
-    doctorName: 'Dr. Emily Rodriguez',
-    prescriptionDate: '2024-02-01',
-    nextDose: null,
-    reminderEnabled: false,
-    doseTimes: [],
-    sideEffects: 'Nausea, diarrhea, skin rash',
-    notes: 'Antibiotic for respiratory infection'
-  }
-];
 
 const styles = StyleSheet.create({
   container: {
