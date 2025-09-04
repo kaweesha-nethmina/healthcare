@@ -130,6 +130,14 @@ const HomeScreen = ({ navigation }) => {
       show: isPatient
     },
     {
+      title: 'Telemedicine',
+      subtitle: 'Virtual consultation',
+      icon: 'videocam',
+      color: COLORS.INFO,
+      onPress: () => navigation.navigate('Consultation', { screen: 'Telemedicine' }),
+      show: isPatient
+    },
+    {
       title: 'Health Records',
       subtitle: 'View your history',
       icon: 'folder',
