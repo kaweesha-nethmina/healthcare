@@ -1255,6 +1255,7 @@ const styles = StyleSheet.create({
   },
   ambulanceActions: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     justifyContent: 'space-around',
     paddingTop: SPACING.SM,
     borderTopWidth: 1,
@@ -1267,6 +1268,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: SPACING.MD,
     borderRadius: BORDER_RADIUS.SM,
     minWidth: 80,
+    margin: SPACING.XS,
   },
   actionText: {
     fontSize: FONT_SIZES.XS,

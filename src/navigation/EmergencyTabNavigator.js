@@ -10,6 +10,7 @@ import SOSManagementScreen from '../screens/emergency/SOSManagementScreen';
 import AmbulanceDispatchScreen from '../screens/emergency/AmbulanceDispatchScreen';
 import EmergencyResourcesScreen from '../screens/emergency/EmergencyResourcesScreen';
 import EmergencyProfileScreen from '../screens/emergency/EmergencyProfileScreen';
+import FirstAidManagementScreen from '../screens/emergency/FirstAidManagementScreen';
 
 // Shared Screens
 import ChatScreen from '../screens/ChatScreen';
@@ -25,6 +26,7 @@ const DashboardStack = createStackNavigator();
 const SOSStack = createStackNavigator();
 const DispatchStack = createStackNavigator();
 const ResourcesStack = createStackNavigator();
+const FirstAidStack = createStackNavigator();
 const ProfileStack = createStackNavigator();
 
 const DashboardStackNavigator = () => (
@@ -122,6 +124,26 @@ const ResourcesStackNavigator = () => (
   </ResourcesStack.Navigator>
 );
 
+const FirstAidStackNavigator = () => (
+  <FirstAidStack.Navigator
+    screenOptions={{
+      headerStyle: {
+        backgroundColor: COLORS.EMERGENCY,
+      },
+      headerTintColor: COLORS.WHITE,
+      headerTitleStyle: {
+        fontWeight: 'bold',
+      },
+    }}
+  >
+    <FirstAidStack.Screen 
+      name="FirstAidMain" 
+      component={FirstAidManagementScreen}
+      options={{ title: 'First Aid Management' }}
+    />
+  </FirstAidStack.Navigator>
+);
+
 const ProfileStackNavigator = () => (
   <ProfileStack.Navigator
     screenOptions={{
@@ -163,6 +185,8 @@ const EmergencyTabNavigator = () => {
             iconName = focused ? 'car-sport' : 'car-sport-outline';
           } else if (route.name === 'Resources') {
             iconName = focused ? 'layers' : 'layers-outline';
+          } else if (route.name === 'FirstAid') {
+            iconName = focused ? 'medical' : 'medical-outline';
           } else if (route.name === 'Profile') {
             iconName = focused ? 'person' : 'person-outline';
           }
@@ -205,9 +229,13 @@ const EmergencyTabNavigator = () => {
         name="Dispatch" 
         component={DispatchStackNavigator}
       />
-      <Tab.Screen 
+      {/* <Tab.Screen 
         name="Resources" 
         component={ResourcesStackNavigator}
+      /> */}
+      <Tab.Screen 
+        name="FirstAid" 
+        component={FirstAidStackNavigator}
       />
       <Tab.Screen 
         name="Profile" 
