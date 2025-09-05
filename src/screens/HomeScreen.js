@@ -5,21 +5,25 @@ import {
   StyleSheet,
   SafeAreaView,
   ScrollView,
-  TouchableOpacity
+  TouchableOpacity,
+  Image
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Card from '../components/Card';
 import { useAuth } from '../context/AuthContext';
 import { COLORS, FONT_SIZES, SPACING, BORDER_RADIUS } from '../constants';
 import useNotifications from '../hooks/useNotifications';
+import useProfilePicture from '../hooks/useProfilePicture';
 import { collection, query, where, getDocs, orderBy, limit } from 'firebase/firestore';
 import { db } from '../services/firebase';
 
 const HomeScreen = ({ navigation }) => {
   const { userProfile, isPatient, isDoctor, isEmergencyOperator } = useAuth();
+  const { fetchUserProfilePicture, getCachedProfilePicture } = useProfilePicture();
   const { unreadCount } = useNotifications({ autoRefresh: true });
   const [recentChats, setRecentChats] = useState([]);
   const [loadingChats, setLoadingChats] = useState(false);
+  const [chatProfilePictures, setChatProfilePictures] = useState({});
 
   // Fetch recent chats when screen loads
   useEffect(() => {
@@ -59,6 +63,9 @@ const HomeScreen = ({ navigation }) => {
         // Sort by last updated time
         chatsData.sort((a, b) => b.lastUpdated - a.lastUpdated);
         setRecentChats(chatsData);
+        
+        // Fetch profile pictures for all doctors in chats
+        fetchChatProfilePictures(chatsData);
       } else {
         // If no chat metadata, fall back to querying messages collection
         const messagesQuery = query(
@@ -95,12 +102,44 @@ const HomeScreen = ({ navigation }) => {
         const chatsData = Array.from(chatsMap.values());
         // Sort by last updated time
         chatsData.sort((a, b) => b.lastUpdated - a.lastUpdated);
-        setRecentChats(chatsData.slice(0, 5));
+        const finalChats = chatsData.slice(0, 5);
+        setRecentChats(finalChats);
+        
+        // Fetch profile pictures for all doctors in chats
+        fetchChatProfilePictures(finalChats);
       }
     } catch (error) {
       console.error('Error fetching recent chats:', error);
     } finally {
       setLoadingChats(false);
+    }
+  };
+
+  // Function to fetch profile pictures for doctors in chats
+  const fetchChatProfilePictures = async (chats) => {
+    try {
+      const profilePictures = { ...chatProfilePictures };
+      for (const chat of chats) {
+        if (chat.doctorId) {
+          // Check cache first
+          const cachedPicture = getCachedProfilePicture(chat.doctorId);
+          if (cachedPicture && cachedPicture !== null) {
+            profilePictures[chat.doctorId] = cachedPicture;
+          } else {
+            // Fetch from Firestore if not cached
+            const pictureUrl = await fetchUserProfilePicture(chat.doctorId);
+            if (pictureUrl && pictureUrl !== null) {
+              profilePictures[chat.doctorId] = pictureUrl;
+            } else {
+              // Explicitly set to null if no picture found
+              profilePictures[chat.doctorId] = null;
+            }
+          }
+        }
+      }
+      setChatProfilePictures(profilePictures);
+    } catch (error) {
+      console.error('Error fetching chat profile pictures:', error);
     }
   };
 
@@ -254,7 +293,22 @@ const HomeScreen = ({ navigation }) => {
                     <Card style={styles.chatCard}>
                       <View style={styles.chatCardContent}>
                         <View style={styles.chatIcon}>
-                          <Ionicons name="person" size={24} color={COLORS.WHITE} />
+                          {chatProfilePictures[chat.doctorId] && chatProfilePictures[chat.doctorId] !== null ? (
+                            <Image 
+                              source={{ uri: chatProfilePictures[chat.doctorId] }} 
+                              style={styles.chatAvatarImage}
+                              onError={() => {
+                                console.log('Chat profile picture load error for doctor:', chat.doctorId);
+                                // Fallback to initials if image fails to load
+                                setChatProfilePictures(prev => ({
+                                  ...prev,
+                                  [chat.doctorId]: null
+                                }));
+                              }}
+                            />
+                          ) : (
+                            <Ionicons name="person" size={24} color={COLORS.WHITE} />
+                          )}
                         </View>
                         <View style={styles.chatInfo}>
                           <Text style={styles.doctorName}>{chat.doctorName}</Text>
@@ -541,6 +595,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginRight: SPACING.MD,
   },
+  
+  chatAvatarImage: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+  },
+  
   chatInfo: {
     flex: 1,
   },

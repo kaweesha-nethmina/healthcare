@@ -22,7 +22,8 @@ import {
   updateDoc,
   doc,
   serverTimestamp,
-  getDoc
+  getDoc,
+  deleteDoc
 } from 'firebase/firestore';
 import { db } from '../../services/firebase';
 import { NotificationService } from '../../services/notificationService';
@@ -58,16 +59,19 @@ const DoctorPrescriptionsScreen = ({ navigation, route }) => {
 
   useEffect(() => {
     loadPrescriptions();
-  }, [patientId]);
+  }, [patientId, userProfile?.uid]);
 
   useEffect(() => {
+    console.log('DoctorPrescriptionsScreen route params:', { patientId, patientName, action });
     if (action === 'create') {
+      console.log('Showing create modal due to action=create');
       setShowCreateModal(true);
     }
-  }, [action]);
+  }, [action, patientId, patientName]);
 
   const loadPrescriptions = async () => {
     try {
+      console.log('Loading prescriptions with params:', { patientId, doctorId: userProfile?.uid });
       // Fetch prescriptions from Firebase
       let prescriptionsQuery = collection(db, 'prescriptions');
       
@@ -109,6 +113,7 @@ const DoctorPrescriptionsScreen = ({ navigation, route }) => {
         return new Date(dateB) - new Date(dateA);
       });
       
+      console.log('Loaded prescriptions:', prescriptionsData.length);
       setPrescriptions(prescriptionsData);
     } catch (error) {
       console.error('Error loading prescriptions:', error);
@@ -168,16 +173,33 @@ const DoctorPrescriptionsScreen = ({ navigation, route }) => {
       
       // Send notification to patient
       try {
-        await NotificationService.createPrescriptionNotification(
-          patientId, 
-          {
+        // Determine what to show in the notification based on number of medications
+        let notificationData;
+        if (prescriptionData.medications && prescriptionData.medications.length > 0) {
+          // Multiple medications
+          notificationData = {
+            id: docRef.id,
+            doctorName: `Dr. ${userProfile?.firstName} ${userProfile?.lastName}`,
+            medicationName: `${prescriptionData.medications.length} medications prescribed`,
+            dosage: 'See prescription for details',
+            frequency: 'See prescription for details',
+            createdAt: new Date().toISOString()
+          };
+        } else {
+          // Single medication (legacy format)
+          notificationData = {
             id: docRef.id,
             doctorName: `Dr. ${userProfile?.firstName} ${userProfile?.lastName}`,
             medicationName: prescriptionData.medicationName,
             dosage: prescriptionData.dosage,
             frequency: prescriptionData.frequency,
             createdAt: new Date().toISOString()
-          }
+          };
+        }
+        
+        await NotificationService.createPrescriptionNotification(
+          patientId, 
+          notificationData
         );
         console.log('Prescription notification sent to patient');
       } catch (notificationError) {
@@ -208,6 +230,23 @@ const DoctorPrescriptionsScreen = ({ navigation, route }) => {
     } catch (error) {
       console.error('Error updating prescription:', error);
       Alert.alert('Error', 'Failed to update prescription');
+    }
+  };
+
+  const deletePrescription = async (prescriptionId) => {
+    try {
+      // Delete from Firebase
+      const prescriptionRef = doc(db, 'prescriptions', prescriptionId);
+      await deleteDoc(prescriptionRef);
+      
+      // Update local state
+      const updated = prescriptions.filter(p => p.id !== prescriptionId);
+      setPrescriptions(updated);
+      
+      Alert.alert('Success', 'Prescription deleted successfully');
+    } catch (error) {
+      console.error('Error deleting prescription:', error);
+      Alert.alert('Error', 'Failed to delete prescription');
     }
   };
 
@@ -247,9 +286,17 @@ const DoctorPrescriptionsScreen = ({ navigation, route }) => {
         setShowEditModal(true);
         break;
       case 'refill':
+        // Determine medication name for the alert
+        let medicationName = 'prescription';
+        if (prescription.medications && prescription.medications.length > 0) {
+          medicationName = `${prescription.medications.length} medications`;
+        } else if (prescription.medicationName) {
+          medicationName = prescription.medicationName;
+        }
+        
         Alert.alert(
           'Authorize Refill',
-          `Authorize refill for ${prescription.medicationName}?`,
+          `Authorize refill for ${medicationName}?`,
           [
             { text: 'Cancel', style: 'cancel' },
             {
@@ -276,9 +323,17 @@ const DoctorPrescriptionsScreen = ({ navigation, route }) => {
         setShowCreateModal(true);
         break;
       case 'discontinue':
+        // Determine medication name for the alert
+        let discontinueMedName = 'prescription';
+        if (prescription.medications && prescription.medications.length > 0) {
+          discontinueMedName = `${prescription.medications.length} medications`;
+        } else if (prescription.medicationName) {
+          discontinueMedName = prescription.medicationName;
+        }
+        
         Alert.alert(
           'Discontinue Prescription',
-          `Discontinue ${prescription.medicationName}?`,
+          `Discontinue ${discontinueMedName}?`,
           [
             { text: 'Cancel', style: 'cancel' },
             {
@@ -293,6 +348,28 @@ const DoctorPrescriptionsScreen = ({ navigation, route }) => {
                 setPrescriptions(updated);
                 Alert.alert('Success', 'Prescription discontinued');
               }
+            }
+          ]
+        );
+        break;
+      case 'delete':
+        // Determine medication name for the alert
+        let deleteMedName = 'prescription';
+        if (prescription.medications && prescription.medications.length > 0) {
+          deleteMedName = `${prescription.medications.length} medications`;
+        } else if (prescription.medicationName) {
+          deleteMedName = prescription.medicationName;
+        }
+        
+        Alert.alert(
+          'Delete Prescription',
+          `Are you sure you want to delete ${deleteMedName}? This action cannot be undone.`,
+          [
+            { text: 'Cancel', style: 'cancel' },
+            {
+              text: 'Delete',
+              style: 'destructive',
+              onPress: () => deletePrescription(prescription.id)
             }
           ]
         );
@@ -326,6 +403,26 @@ const DoctorPrescriptionsScreen = ({ navigation, route }) => {
     const status = getPrescriptionStatus(prescription);
     const statusColor = getStatusColor(status);
 
+    // Check if this prescription has multiple medications
+    const hasMultipleMedications = prescription.medications && prescription.medications.length > 1;
+    const displayMedication = hasMultipleMedications 
+      ? `${prescription.medications.length} medications` 
+      : (prescription.medications 
+          ? prescription.medications[0].medicationName 
+          : prescription.medicationName);
+
+    const displayDosage = hasMultipleMedications
+      ? 'Multiple dosages'
+      : (prescription.medications 
+          ? prescription.medications[0].dosage 
+          : prescription.dosage);
+
+    const displayFrequency = hasMultipleMedications
+      ? 'Multiple frequencies'
+      : (prescription.medications 
+          ? prescription.medications[0].frequency 
+          : prescription.frequency);
+
     return (
       <Card style={styles.prescriptionCard}>
         <TouchableOpacity onPress={() => viewPrescriptionDetails(prescription)}>
@@ -335,10 +432,10 @@ const DoctorPrescriptionsScreen = ({ navigation, route }) => {
                 <Ionicons name="medical" size={20} color={COLORS.WHITE} />
               </View>
               <View style={styles.prescriptionDetails}>
-                <Text style={styles.medicationName}>{prescription.medicationName}</Text>
+                <Text style={styles.medicationName}>{displayMedication}</Text>
                 <Text style={styles.patientName}>{prescription.patientName}</Text>
                 <Text style={styles.prescriptionMeta}>
-                  {prescription.dosage} • {prescription.frequency}
+                  {displayDosage} • {displayFrequency}
                 </Text>
               </View>
             </View>
@@ -354,7 +451,13 @@ const DoctorPrescriptionsScreen = ({ navigation, route }) => {
           <View style={styles.prescriptionInfo}>
             <View style={styles.infoRow}>
               <Text style={styles.infoLabel}>Instructions:</Text>
-              <Text style={styles.infoValue}>{prescription.instructions}</Text>
+              <Text style={styles.infoValue}>
+                {hasMultipleMedications 
+                  ? 'Multiple instructions' 
+                  : (prescription.medications 
+                      ? prescription.medications[0].instructions 
+                      : prescription.instructions)}
+              </Text>
             </View>
             <View style={styles.infoRow}>
               <Text style={styles.infoLabel}>Duration:</Text>
@@ -407,13 +510,22 @@ const DoctorPrescriptionsScreen = ({ navigation, route }) => {
           )}
 
           {(status === 'expired' || status === 'no-refills') && (
-            <TouchableOpacity
-              style={styles.actionButton}
-              onPress={() => handlePrescriptionAction(prescription, 'renew')}
-            >
-              <Ionicons name="add-outline" size={18} color={COLORS.INFO} />
-              <Text style={[styles.actionText, { color: COLORS.INFO }]}>Renew</Text>
-            </TouchableOpacity>
+            <>
+              <TouchableOpacity
+                style={styles.actionButton}
+                onPress={() => handlePrescriptionAction(prescription, 'renew')}
+              >
+                <Ionicons name="add-outline" size={18} color={COLORS.INFO} />
+                <Text style={[styles.actionText, { color: COLORS.INFO }]}>Renew</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.actionButton}
+                onPress={() => handlePrescriptionAction(prescription, 'delete')}
+              >
+                <Ionicons name="trash-outline" size={18} color={COLORS.ERROR} />
+                <Text style={[styles.actionText, { color: COLORS.ERROR }]}>Delete</Text>
+              </TouchableOpacity>
+            </>
           )}
         </View>
       </Card>
@@ -429,6 +541,33 @@ const DoctorPrescriptionsScreen = ({ navigation, route }) => {
       duration: selectedPrescription?.duration || '30',
       refills: selectedPrescription?.refills || '2'
     }]);
+
+    // Update the useEffect to handle multiple medications when renewing
+    useEffect(() => {
+      if (selectedPrescription) {
+        // Check if this is a multi-medication prescription
+        if (selectedPrescription.medications && selectedPrescription.medications.length > 0) {
+          setPrescriptionItems(selectedPrescription.medications.map(med => ({
+            medicationName: med.medicationName || '',
+            dosage: med.dosage || '',
+            frequency: med.frequency || '',
+            instructions: med.instructions || '',
+            duration: selectedPrescription.duration || '30',
+            refills: selectedPrescription.refills?.toString() || '2'
+          })));
+        } else {
+          // Single medication prescription
+          setPrescriptionItems([{
+            medicationName: selectedPrescription.medicationName || '',
+            dosage: selectedPrescription.dosage || '',
+            frequency: selectedPrescription.frequency || '',
+            instructions: selectedPrescription.instructions || '',
+            duration: selectedPrescription.duration || '30',
+            refills: selectedPrescription.refills?.toString() || '2'
+          }]);
+        }
+      }
+    }, [selectedPrescription]);
 
     const addPrescriptionItem = () => {
       setPrescriptionItems([...prescriptionItems, { 
@@ -465,25 +604,27 @@ const DoctorPrescriptionsScreen = ({ navigation, route }) => {
       }
 
       try {
-        // Create prescriptions for all items
-        for (const item of prescriptionItems) {
-          const endDate = new Date();
-          endDate.setDate(endDate.getDate() + parseInt(item.duration));
+        // Calculate end date based on the first item's duration
+        const endDate = new Date();
+        const duration = parseInt(prescriptionItems[0]?.duration || '30');
+        endDate.setDate(endDate.getDate() + duration);
 
-          const prescriptionData = {
+        // Create a single prescription with multiple medications
+        const prescriptionData = {
+          medications: prescriptionItems.map(item => ({
             medicationName: item.medicationName,
             dosage: item.dosage,
             frequency: item.frequency,
-            instructions: item.instructions,
-            startDate: new Date().toISOString(),
-            endDate: endDate.toISOString(),
-            duration: parseInt(item.duration),
-            refills: parseInt(item.refills),
-            refillsRemaining: parseInt(item.refills)
-          };
+            instructions: item.instructions
+          })),
+          startDate: new Date().toISOString(),
+          endDate: endDate.toISOString(),
+          duration: duration,
+          refills: parseInt(prescriptionItems[0]?.refills || '2'),
+          refillsRemaining: parseInt(prescriptionItems[0]?.refills || '2')
+        };
 
-          await createPrescription(prescriptionData);
-        }
+        await createPrescription(prescriptionData);
 
         // Close modal and reset
         setShowCreateModal(false);
@@ -496,10 +637,10 @@ const DoctorPrescriptionsScreen = ({ navigation, route }) => {
           refills: '2'
         }]);
         
-        Alert.alert('Success', 'All prescriptions created successfully');
+        Alert.alert('Success', 'Prescription created successfully with multiple medications');
       } catch (error) {
-        console.error('Error creating prescriptions:', error);
-        Alert.alert('Error', 'Failed to create prescriptions');
+        console.error('Error creating prescription:', error);
+        Alert.alert('Error', 'Failed to create prescription');
       }
     };
 
@@ -672,46 +813,76 @@ const DoctorPrescriptionsScreen = ({ navigation, route }) => {
   };
 
   const EditPrescriptionModal = () => {
-    const [editFormData, setEditFormData] = useState({
-      medicationName: selectedPrescription?.medicationName || '',
-      dosage: selectedPrescription?.dosage || '',
-      frequency: selectedPrescription?.frequency || '',
-      instructions: selectedPrescription?.instructions || '',
-      startDate: selectedPrescription?.startDate || new Date().toISOString().split('T')[0],
-      endDate: selectedPrescription?.endDate || new Date().toISOString().split('T')[0],
-      refills: selectedPrescription?.refills?.toString() || '0'
-    });
+    const [editPrescriptionItems, setEditPrescriptionItems] = useState([
+      { 
+        medicationName: '', 
+        dosage: '', 
+        frequency: '', 
+        instructions: ''
+      }
+    ]);
 
     useEffect(() => {
       if (selectedPrescription) {
-        setEditFormData({
-          medicationName: selectedPrescription.medicationName || '',
-          dosage: selectedPrescription.dosage || '',
-          frequency: selectedPrescription.frequency || '',
-          instructions: selectedPrescription.instructions || '',
-          startDate: selectedPrescription.startDate || new Date().toISOString().split('T')[0],
-          endDate: selectedPrescription.endDate || new Date().toISOString().split('T')[0],
-          refills: selectedPrescription.refills?.toString() || '0'
-        });
+        // Check if this is a multi-medication prescription
+        if (selectedPrescription.medications && selectedPrescription.medications.length > 0) {
+          setEditPrescriptionItems(selectedPrescription.medications.map(med => ({
+            medicationName: med.medicationName || '',
+            dosage: med.dosage || '',
+            frequency: med.frequency || '',
+            instructions: med.instructions || ''
+          })));
+        } else {
+          // Single medication prescription
+          setEditPrescriptionItems([{
+            medicationName: selectedPrescription.medicationName || '',
+            dosage: selectedPrescription.dosage || '',
+            frequency: selectedPrescription.frequency || '',
+            instructions: selectedPrescription.instructions || ''
+          }]);
+        }
       }
     }, [selectedPrescription]);
 
+    const addEditPrescriptionItem = () => {
+      setEditPrescriptionItems([...editPrescriptionItems, { 
+        medicationName: '', 
+        dosage: '', 
+        frequency: '', 
+        instructions: '' 
+      }]);
+    };
+
+    const removeEditPrescriptionItem = (index) => {
+      if (editPrescriptionItems.length > 1) {
+        const newItems = [...editPrescriptionItems];
+        newItems.splice(index, 1);
+        setEditPrescriptionItems(newItems);
+      }
+    };
+
+    const updateEditPrescriptionItem = (index, field, value) => {
+      const newItems = [...editPrescriptionItems];
+      newItems[index][field] = value;
+      setEditPrescriptionItems(newItems);
+    };
+
     const handleSubmit = async () => {
-      if (!editFormData.medicationName || !editFormData.dosage || !editFormData.frequency) {
-        Alert.alert('Error', 'Please fill in all required fields');
-        return;
+      // Validate all items
+      for (const item of editPrescriptionItems) {
+        if (!item.medicationName || !item.dosage || !item.frequency) {
+          Alert.alert('Error', 'Please fill in all required fields for all medications');
+          return;
+        }
       }
 
       try {
         await updatePrescription({
-          medicationName: editFormData.medicationName,
-          dosage: editFormData.dosage,
-          frequency: editFormData.frequency,
-          instructions: editFormData.instructions,
-          startDate: editFormData.startDate,
-          endDate: editFormData.endDate,
-          refills: parseInt(editFormData.refills),
-          refillsRemaining: parseInt(editFormData.refills)
+          medications: editPrescriptionItems,
+          startDate: selectedPrescription.startDate,
+          endDate: selectedPrescription.endDate,
+          refills: selectedPrescription.refills,
+          refillsRemaining: selectedPrescription.refillsRemaining
         });
       } catch (error) {
         console.error('Error updating prescription:', error);
@@ -740,87 +911,75 @@ const DoctorPrescriptionsScreen = ({ navigation, route }) => {
             )}
 
             <ScrollView style={styles.formContainer} showsVerticalScrollIndicator={false}>
-              <View style={styles.inputGroup}>
-                <Text style={styles.inputLabel}>Medication Name *</Text>
-                <TextInput
-                  style={styles.textInput}
-                  value={editFormData.medicationName}
-                  onChangeText={(text) => setEditFormData({...editFormData, medicationName: text})}
-                  placeholder="Enter medication name"
-                  placeholderTextColor={COLORS.GRAY_MEDIUM}
-                />
-              </View>
+              {editPrescriptionItems.map((item, index) => (
+                <View key={index} style={styles.prescriptionItemContainer}>
+                  {editPrescriptionItems.length > 1 && (
+                    <TouchableOpacity 
+                      style={styles.removeButton}
+                      onPress={() => removeEditPrescriptionItem(index)}
+                    >
+                      <Ionicons name="close-circle" size={24} color={COLORS.ERROR} />
+                    </TouchableOpacity>
+                  )}
+                  
+                  <View style={styles.inputGroup}>
+                    <Text style={styles.inputLabel}>Medication Name *</Text>
+                    <TextInput
+                      style={styles.textInput}
+                      value={item.medicationName}
+                      onChangeText={(text) => updateEditPrescriptionItem(index, 'medicationName', text)}
+                      placeholder="Enter medication name"
+                      placeholderTextColor={COLORS.GRAY_MEDIUM}
+                    />
+                  </View>
 
-              <View style={styles.inputRow}>
-                <View style={[styles.inputGroup, { flex: 1, marginRight: SPACING.SM }]}>
-                  <Text style={styles.inputLabel}>Dosage *</Text>
-                  <TextInput
-                    style={styles.textInput}
-                    value={editFormData.dosage}
-                    onChangeText={(text) => setEditFormData({...editFormData, dosage: text})}
-                    placeholder="e.g., 10mg"
-                    placeholderTextColor={COLORS.GRAY_MEDIUM}
-                  />
-                </View>
-                <View style={[styles.inputGroup, { flex: 1, marginLeft: SPACING.SM }]}>
-                  <Text style={styles.inputLabel}>Frequency *</Text>
-                  <TextInput
-                    style={styles.textInput}
-                    value={editFormData.frequency}
-                    onChangeText={(text) => setEditFormData({...editFormData, frequency: text})}
-                    placeholder="e.g., Twice daily"
-                    placeholderTextColor={COLORS.GRAY_MEDIUM}
-                  />
-                </View>
-              </View>
+                  <View style={styles.inputRow}>
+                    <View style={[styles.inputGroup, { flex: 1, marginRight: SPACING.SM }]}>
+                      <Text style={styles.inputLabel}>Dosage *</Text>
+                      <TextInput
+                        style={styles.textInput}
+                        value={item.dosage}
+                        onChangeText={(text) => updateEditPrescriptionItem(index, 'dosage', text)}
+                        placeholder="e.g., 10mg"
+                        placeholderTextColor={COLORS.GRAY_MEDIUM}
+                      />
+                    </View>
+                    <View style={[styles.inputGroup, { flex: 1, marginLeft: SPACING.SM }]}>
+                      <Text style={styles.inputLabel}>Frequency *</Text>
+                      <TextInput
+                        style={styles.textInput}
+                        value={item.frequency}
+                        onChangeText={(text) => updateEditPrescriptionItem(index, 'frequency', text)}
+                        placeholder="e.g., Twice daily"
+                        placeholderTextColor={COLORS.GRAY_MEDIUM}
+                      />
+                    </View>
+                  </View>
 
-              <View style={styles.inputGroup}>
-                <Text style={styles.inputLabel}>Instructions</Text>
-                <TextInput
-                  style={[styles.textInput, styles.textArea]}
-                  value={editFormData.instructions}
-                  onChangeText={(text) => setEditFormData({...editFormData, instructions: text})}
-                  placeholder="Special instructions for the patient"
-                  multiline
-                  numberOfLines={3}
-                  placeholderTextColor={COLORS.GRAY_MEDIUM}
-                />
-              </View>
-
-              <View style={styles.inputRow}>
-                <View style={[styles.inputGroup, { flex: 1, marginRight: SPACING.SM }]}>
-                  <Text style={styles.inputLabel}>Start Date</Text>
-                  <TextInput
-                    style={styles.textInput}
-                    value={editFormData.startDate}
-                    onChangeText={(text) => setEditFormData({...editFormData, startDate: text})}
-                    placeholder="YYYY-MM-DD"
-                    placeholderTextColor={COLORS.GRAY_MEDIUM}
-                  />
+                  <View style={styles.inputGroup}>
+                    <Text style={styles.inputLabel}>Instructions</Text>
+                    <TextInput
+                      style={[styles.textInput, styles.textArea]}
+                      value={item.instructions}
+                      onChangeText={(text) => updateEditPrescriptionItem(index, 'instructions', text)}
+                      placeholder="Special instructions for the patient"
+                      multiline
+                      numberOfLines={3}
+                      placeholderTextColor={COLORS.GRAY_MEDIUM}
+                    />
+                  </View>
+                  
+                  {index === editPrescriptionItems.length - 1 && (
+                    <TouchableOpacity 
+                      style={styles.addButton}
+                      onPress={addEditPrescriptionItem}
+                    >
+                      <Ionicons name="add-circle" size={24} color={COLORS.PRIMARY} />
+                      <Text style={styles.addButtonText}>Add Another Medication</Text>
+                    </TouchableOpacity>
+                  )}
                 </View>
-                <View style={[styles.inputGroup, { flex: 1, marginLeft: SPACING.SM }]}>
-                  <Text style={styles.inputLabel}>End Date</Text>
-                  <TextInput
-                    style={styles.textInput}
-                    value={editFormData.endDate}
-                    onChangeText={(text) => setEditFormData({...editFormData, endDate: text})}
-                    placeholder="YYYY-MM-DD"
-                    placeholderTextColor={COLORS.GRAY_MEDIUM}
-                  />
-                </View>
-              </View>
-
-              <View style={styles.inputGroup}>
-                <Text style={styles.inputLabel}>Refills</Text>
-                <TextInput
-                  style={styles.textInput}
-                  value={editFormData.refills}
-                  onChangeText={(text) => setEditFormData({...editFormData, refills: text})}
-                  placeholder="Number of refills"
-                  keyboardType="numeric"
-                  placeholderTextColor={COLORS.GRAY_MEDIUM}
-                />
-              </View>
+              ))}
             </ScrollView>
 
             <View style={styles.modalActions}>
@@ -863,20 +1022,43 @@ const DoctorPrescriptionsScreen = ({ navigation, route }) => {
         {detailPrescription && (
           <ScrollView style={styles.modalContent}>
             <Card style={styles.detailCard}>
-              <Text style={styles.detailMedicationName}>
-                {detailPrescription.medicationName}
-              </Text>
-              <Text style={styles.detailDosage}>{detailPrescription.dosage}</Text>
-              
-              <View style={styles.detailSection}>
-                <Text style={styles.detailSectionTitle}>Instructions</Text>
-                <Text style={styles.detailText}>{detailPrescription.instructions}</Text>
-              </View>
-              
-              <View style={styles.detailSection}>
-                <Text style={styles.detailSectionTitle}>Frequency</Text>
-                <Text style={styles.detailText}>{detailPrescription.frequency}</Text>
-              </View>
+              {/* Check if this is a multi-medication prescription */}
+              {detailPrescription.medications && detailPrescription.medications.length > 0 ? (
+                <>
+                  <Text style={styles.detailMedicationName}>
+                    Prescription with {detailPrescription.medications.length} Medications
+                  </Text>
+                  {detailPrescription.medications.map((med, index) => (
+                    <View key={index} style={styles.detailSection}>
+                      <Text style={[styles.detailSectionTitle, { marginBottom: SPACING.XS }]}>
+                        Medication #{index + 1}: {med.medicationName}
+                      </Text>
+                      <Text style={styles.detailText}>Dosage: {med.dosage}</Text>
+                      <Text style={styles.detailText}>Frequency: {med.frequency}</Text>
+                      {med.instructions && (
+                        <Text style={styles.detailText}>Instructions: {med.instructions}</Text>
+                      )}
+                    </View>
+                  ))}
+                </>
+              ) : (
+                <>
+                  <Text style={styles.detailMedicationName}>
+                    {detailPrescription.medicationName}
+                  </Text>
+                  <Text style={styles.detailDosage}>{detailPrescription.dosage}</Text>
+                  
+                  <View style={styles.detailSection}>
+                    <Text style={styles.detailSectionTitle}>Instructions</Text>
+                    <Text style={styles.detailText}>{detailPrescription.instructions}</Text>
+                  </View>
+                  
+                  <View style={styles.detailSection}>
+                    <Text style={styles.detailSectionTitle}>Frequency</Text>
+                    <Text style={styles.detailText}>{detailPrescription.frequency}</Text>
+                  </View>
+                </>
+              )}
               
               <View style={styles.detailSection}>
                 <Text style={styles.detailSectionTitle}>Duration</Text>
@@ -906,9 +1088,10 @@ const DoctorPrescriptionsScreen = ({ navigation, route }) => {
                 </Text>
               </View>
               
-              {/* Show edit button only if prescription is not expired */}
-              {new Date(detailPrescription.endDate) > new Date() && (
-                <View style={styles.editButtonContainer}>
+              {/* Action buttons */}
+              <View style={styles.buttonContainer}>
+                {/* Show edit button only if prescription is not expired */}
+                {new Date(detailPrescription.endDate) > new Date() && (
                   <Button
                     title="Edit Prescription"
                     onPress={() => {
@@ -918,8 +1101,21 @@ const DoctorPrescriptionsScreen = ({ navigation, route }) => {
                     }}
                     style={styles.editButton}
                   />
-                </View>
-              )}
+                )}
+                
+                {/* Show delete button for expired prescriptions */}
+                {new Date(detailPrescription.endDate) < new Date() && (
+                  <Button
+                    title="Delete Prescription"
+                    onPress={() => {
+                      setShowDetailModal(false);
+                      handlePrescriptionAction(detailPrescription, 'delete');
+                    }}
+                    style={styles.editButton}
+                    variant="danger"
+                  />
+                )}
+              </View>
             </Card>
           </ScrollView>
         )}
@@ -1331,10 +1527,6 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: COLORS.BACKGROUND,
   },
-  modalContent: {
-    flex: 1,
-    padding: SPACING.MD,
-  },
   closeButton: {
     padding: SPACING.SM,
   },
@@ -1383,6 +1575,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     marginTop: SPACING.LG,
+    gap: SPACING.MD,
   },
   cancelButton: {
     flex: 1,

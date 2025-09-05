@@ -142,7 +142,9 @@ const DoctorProfileScreen = ({ route, navigation }) => {
   const handleStartChat = () => {
     navigation.navigate('Chat', {
       doctorId: doctorData.id,
-      doctorName: doctorData.name
+      doctorName: doctorData.name,
+      patientId: userProfile?.uid,
+      patientName: `${userProfile?.firstName || ''} ${userProfile?.lastName || ''}`.trim() || 'Patient'
     });
   };
 

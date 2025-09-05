@@ -38,20 +38,48 @@ import NotificationService from '../services/notificationService';
 import useProfilePicture from '../hooks/useProfilePicture';
 
 const ChatScreen = ({ navigation, route }) => {
-  const { appointmentId, doctorId, doctorName, patientId, patientName, chatId: routeChatId } = route.params || {};
+  // Add safety check for route.params
+  const routeParams = route?.params || {};
+  const { appointmentId, doctorId, doctorName, patientId, patientName, chatId: routeChatId } = routeParams;
+  
   const { user, userProfile } = useAuth();
-  const { fetchUserProfilePicture, getCachedProfilePicture, profilePictures, clearCache } = useProfilePicture();
+  const { fetchUserProfilePicture, getCachedProfilePicture, clearCache } = useProfilePicture();
+  const [profilePictures, setProfilePictures] = useState({});
   const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const [chatPartnerName, setChatPartnerName] = useState('');
+  const [hasValidParams, setHasValidParams] = useState(true);
   const flatListRef = useRef(null);
   const unsubscribeRef = useRef(null);
+
+  // Check for required parameters at the beginning
+  useEffect(() => {
+    if (!routeParams || !doctorId || !patientId) {
+      setHasValidParams(false);
+      Alert.alert(
+        'Error',
+        'Missing required chat parameters. Please try again.',
+        [{ text: 'Go Back', onPress: () => navigation.goBack() }]
+      );
+    }
+  }, []);
+
+  // If we don't have valid parameters, show a simple loading screen
+  if (!hasValidParams) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.container}>
+          <Text>Loading...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   useEffect(() => {
     // Load chat messages from Firebase with real-time listener
     if (user) {
-      // Validate required parameters
+      // Validate required parameters (redundant check but kept for safety)
       if (!doctorId || !patientId) {
         console.warn('Missing critical chat parameters: doctorId or patientId');
         Alert.alert(
@@ -69,6 +97,7 @@ const ChatScreen = ({ navigation, route }) => {
       // User is not authenticated, clear any existing data
       setMessages([]);
       setChatPartnerName('');
+      setProfilePictures({});
       clearCache();
     }
     
@@ -152,8 +181,15 @@ const ChatScreen = ({ navigation, route }) => {
   const loadChatParticipantsProfilePictures = async () => {
     try {
       // Fetch profile pictures for both doctor and patient using the hook
-      await fetchUserProfilePicture(doctorId);
-      await fetchUserProfilePicture(patientId);
+      const doctorPicture = await fetchUserProfilePicture(doctorId);
+      const patientPicture = await fetchUserProfilePicture(patientId);
+      
+      // Update state with the fetched profile pictures
+      setProfilePictures(prev => ({
+        ...prev,
+        [doctorId]: doctorPicture,
+        [patientId]: patientPicture
+      }));
     } catch (error) {
       console.error('Error loading chat participants profile pictures:', error);
     }
@@ -274,6 +310,8 @@ const ChatScreen = ({ navigation, route }) => {
       chatParams = {
         doctorId,
         patientId,
+        doctorName: doctorName || '',
+        patientName: patientName || '',
         chatId: chatIdToUse
       };
       
@@ -294,6 +332,7 @@ const ChatScreen = ({ navigation, route }) => {
         console.log('Updated chat metadata with latest message');
       } catch (error) {
         console.error('Error updating chat metadata with last message:', error);
+        // Don't throw error here as this is not critical to message sending
       }
       
       // Prepare message data
@@ -317,10 +356,15 @@ const ChatScreen = ({ navigation, route }) => {
       
       // Send push notification to the recipient
       if (recipientId) {
-        await NotificationService.createChatMessageNotification(recipientId, {
-          id: docRef.id,
-          ...messageData
-        });
+        try {
+          await NotificationService.createChatMessageNotification(recipientId, {
+            id: docRef.id,
+            ...messageData
+          });
+        } catch (notificationError) {
+          console.error('Error sending push notification (non-critical):', notificationError);
+          // Don't throw error here as this is not critical to message sending
+        }
       }
       
       setInputText('');

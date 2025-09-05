@@ -8,7 +8,8 @@ import {
   TouchableOpacity,
   Alert,
   Image,
-  Platform
+  Platform,
+  Linking
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
@@ -362,30 +363,44 @@ const UploadDocumentScreen = ({ navigation }) => {
   );
 
   const DocumentCard = ({ document }) => {
-    const handleDownload = () => {
+    const handleOpenDocument = async () => {
       if (document.downloadURL) {
-        Alert.alert(
-          'View Document',
-          `Would you like to view "${document.name}"?`,
-          [
-            { text: 'Cancel', style: 'cancel' },
-            {
-              text: 'View',
-              onPress: () => {
-                // In a real app, you might open the document in a viewer
-                // For now, just show the URL
-                console.log('Document URL:', document.downloadURL);
-                Alert.alert('Info', 'Document viewing feature will be available soon.');
-              }
-            }
-          ]
-        );
+        try {
+          // Check if the URL can be opened
+          const supported = await Linking.canOpenURL(document.downloadURL);
+          
+          if (supported) {
+            // Open the document in the device's default viewer
+            await Linking.openURL(document.downloadURL);
+          } else {
+            // Fallback: Show alert with URL
+            Alert.alert(
+              'View Document',
+              `Document URL: ${document.downloadURL}`,
+              [
+                { text: 'OK' },
+                {
+                  text: 'Copy URL',
+                  onPress: () => {
+                    // In a real app, you might copy to clipboard here
+                    Alert.alert('Info', 'URL copied to clipboard (feature coming soon)');
+                  }
+                }
+              ]
+            );
+          }
+        } catch (error) {
+          console.error('Error opening document:', error);
+          Alert.alert('Error', 'Unable to open document. Please try again.');
+        }
+      } else {
+        Alert.alert('Error', 'Document URL not available');
       }
     };
 
     return (
       <Card style={styles.documentCard}>
-        <TouchableOpacity onPress={handleDownload}>
+        <TouchableOpacity onPress={handleOpenDocument}>
           <View style={styles.documentHeader}>
             <View style={styles.documentIconContainer}>
               <Ionicons 
@@ -422,6 +437,11 @@ const UploadDocumentScreen = ({ navigation }) => {
               onError={(error) => console.log('Image load error:', error)}
             />
           )}
+          {/* Visual indicator that the document is clickable */}
+          <View style={styles.documentFooter}>
+            <Text style={styles.openDocumentText}>Tap to open document</Text>
+            <Ionicons name="open-outline" size={16} color={COLORS.PRIMARY} />
+          </View>
         </TouchableOpacity>
       </Card>
     );
@@ -592,12 +612,15 @@ const styles = StyleSheet.create({
   },
   documentCard: {
     marginBottom: SPACING.SM,
+    backgroundColor: COLORS.WHITE,
   },
+  
   documentHeader: {
     flexDirection: 'row',
     alignItems: 'flex-start',
     marginBottom: SPACING.SM,
   },
+  
   documentIconContainer: {
     width: 40,
     height: 40,
@@ -607,44 +630,70 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginRight: SPACING.MD,
   },
+  
   documentInfo: {
     flex: 1,
   },
+  
   documentName: {
     fontSize: FONT_SIZES.MD,
     fontWeight: '600',
     color: COLORS.TEXT_PRIMARY,
     marginBottom: SPACING.XS / 2,
   },
+  
   documentMeta: {
     fontSize: FONT_SIZES.SM,
     color: COLORS.TEXT_SECONDARY,
     marginBottom: SPACING.XS / 2,
   },
+  
   documentCategory: {
     fontSize: FONT_SIZES.XS,
     color: COLORS.PRIMARY,
     fontWeight: '600',
   },
+  
   storageProvider: {
     fontSize: FONT_SIZES.XS,
     color: COLORS.SUCCESS,
     fontWeight: '500',
     fontStyle: 'italic',
   },
+  
   deleteButton: {
     padding: SPACING.SM,
   },
+  
   documentPreview: {
     width: '100%',
     height: 150,
     borderRadius: BORDER_RADIUS.MD,
     marginTop: SPACING.SM,
   },
+  
+  documentFooter: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    marginTop: SPACING.SM,
+    paddingTop: SPACING.SM,
+    borderTopWidth: 1,
+    borderTopColor: COLORS.BORDER,
+  },
+  
+  openDocumentText: {
+    fontSize: FONT_SIZES.SM,
+    color: COLORS.PRIMARY,
+    fontWeight: '600',
+    marginRight: SPACING.XS,
+  },
+  
   emptyState: {
     alignItems: 'center',
     paddingVertical: SPACING.XXL,
   },
+  
   emptyTitle: {
     fontSize: FONT_SIZES.LG,
     fontWeight: 'bold',
@@ -652,27 +701,32 @@ const styles = StyleSheet.create({
     marginTop: SPACING.MD,
     marginBottom: SPACING.XS,
   },
+  
   emptySubtitle: {
     fontSize: FONT_SIZES.MD,
     color: COLORS.TEXT_SECONDARY,
     textAlign: 'center',
     paddingHorizontal: SPACING.MD,
   },
+  
   tipsCard: {
     backgroundColor: COLORS.INFO + '10',
     marginBottom: SPACING.XL,
   },
+  
   tipsHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: SPACING.SM,
   },
+  
   tipsTitle: {
     fontSize: FONT_SIZES.MD,
     fontWeight: '600',
     color: COLORS.INFO,
     marginLeft: SPACING.SM,
   },
+  
   tipsText: {
     fontSize: FONT_SIZES.SM,
     color: COLORS.TEXT_SECONDARY,

@@ -233,7 +233,9 @@ const ConsultationScreen = ({ navigation }) => {
                 navigation.navigate('Chat', {
                   appointmentId: appointment.id,
                   doctorId: appointment.doctorId,
-                  doctorName: appointment.doctorName
+                  doctorName: appointment.doctorName,
+                  patientId: appointment.patientId,
+                  patientName: appointment.patientName
                 });
               }
             }}

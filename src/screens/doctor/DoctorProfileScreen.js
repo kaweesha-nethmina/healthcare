@@ -28,7 +28,6 @@ const DoctorProfileScreen = ({ navigation }) => {
   const { userProfile, updateUserProfile, logout } = useAuth();
   const [doctorData, setDoctorData] = useState({});
   const [showEditModal, setShowEditModal] = useState(false);
-  const [editSection, setEditSection] = useState('');
   const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
 
   useEffect(() => {
@@ -45,8 +44,7 @@ const DoctorProfileScreen = ({ navigation }) => {
     }
   };
 
-  const handleEditProfile = (section) => {
-    setEditSection(section);
+  const handleEditProfile = () => {
     setShowEditModal(true);
   };
 
@@ -231,7 +229,7 @@ const DoctorProfileScreen = ({ navigation }) => {
         
         <TouchableOpacity
           style={styles.editButton}
-          onPress={() => handleEditProfile('basic')}
+          onPress={handleEditProfile}
         >
           <Ionicons name="create-outline" size={20} color={COLORS.PRIMARY} />
         </TouchableOpacity>
@@ -256,23 +254,20 @@ const DoctorProfileScreen = ({ navigation }) => {
           <Text style={styles.statLabel}>Consultations</Text>
         </View>
         <View style={styles.statItem}>
-          <Text style={styles.statNumber}>${doctorData.consultationFee}</Text>
+          <Text style={styles.statNumber}>LKR {doctorData.consultationFee}</Text>
           <Text style={styles.statLabel}>Consultation Fee</Text>
         </View>
       </View>
     </Card>
   );
 
-  const InfoSection = ({ title, data, icon, onEdit }) => (
+  const InfoSection = ({ title, data, icon }) => (
     <Card style={styles.infoCard}>
       <View style={styles.sectionHeader}>
         <View style={styles.sectionTitleContainer}>
           <Ionicons name={icon} size={20} color={COLORS.PRIMARY} />
           <Text style={styles.sectionTitle}>{title}</Text>
         </View>
-        <TouchableOpacity onPress={onEdit}>
-          <Ionicons name="create-outline" size={20} color={COLORS.GRAY_MEDIUM} />
-        </TouchableOpacity>
       </View>
       
       {Array.isArray(data) ? (
@@ -328,29 +323,48 @@ const DoctorProfileScreen = ({ navigation }) => {
     </View>
   );
 
-  const EditModal = () => {
-    const [editData, setEditData] = useState('');
+  const EditProfileModal = () => {
+    const [editData, setEditData] = useState({
+      firstName: doctorData.firstName || '',
+      lastName: doctorData.lastName || '',
+      specialization: doctorData.specialization || '',
+      licenseNumber: doctorData.licenseNumber || '',
+      bio: doctorData.bio || '',
+      yearsOfExperience: doctorData.yearsOfExperience?.toString() || '',
+      consultationFee: doctorData.consultationFee?.toString() || '',
+      education: doctorData.education || [],
+      certifications: doctorData.certifications || [],
+      languages: doctorData.languages || [],
+      hospitalAffiliations: doctorData.hospitalAffiliations || [],
+      achievements: doctorData.achievements || []
+    });
 
-    useEffect(() => {
-      if (editSection === 'bio') {
-        setEditData(doctorData.bio || '');
-      } else if (editSection === 'fee') {
-        setEditData(doctorData.consultationFee?.toString() || '');
-      }
-    }, [editSection]);
+    const handleSave = async () => {
+      try {
+        // Convert numeric values back to numbers
+        const updatedData = {
+          ...doctorData,
+          ...editData,
+          yearsOfExperience: parseInt(editData.yearsOfExperience) || 0,
+          consultationFee: parseInt(editData.consultationFee) || 0
+        };
 
-    const handleSave = () => {
-      let updatedData = { ...doctorData };
-      
-      if (editSection === 'bio') {
-        updatedData.bio = editData;
-      } else if (editSection === 'fee') {
-        updatedData.consultationFee = parseInt(editData) || 0;
+        // Update the local state
+        setDoctorData(updatedData);
+        
+        // Update the user profile
+        const result = await updateUserProfile(updatedData);
+        
+        if (result.success) {
+          setShowEditModal(false);
+          Alert.alert('Success', 'Profile updated successfully');
+        } else {
+          throw new Error(result.error || 'Failed to update profile');
+        }
+      } catch (error) {
+        console.error('Error updating profile:', error);
+        Alert.alert('Error', error.message || 'Failed to update profile');
       }
-      
-      setDoctorData(updatedData);
-      setShowEditModal(false);
-      Alert.alert('Success', 'Profile updated successfully');
     };
 
     return (
@@ -363,36 +377,157 @@ const DoctorProfileScreen = ({ navigation }) => {
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>
-                Edit {editSection === 'bio' ? 'Biography' : 'Consultation Fee'}
-              </Text>
+              <Text style={styles.modalTitle}>Edit Profile</Text>
               <TouchableOpacity onPress={() => setShowEditModal(false)}>
                 <Ionicons name="close" size={24} color={COLORS.TEXT_PRIMARY} />
               </TouchableOpacity>
             </View>
 
-            <View style={styles.inputContainer}>
-              {editSection === 'bio' ? (
-                <TextInput
-                  style={[styles.textInput, styles.textArea]}
-                  value={editData}
-                  onChangeText={setEditData}
-                  placeholder="Enter your professional biography..."
-                  multiline
-                  numberOfLines={6}
-                  placeholderTextColor={COLORS.GRAY_MEDIUM}
-                />
-              ) : (
+            <ScrollView style={styles.formContainer} showsVerticalScrollIndicator={false}>
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>First Name</Text>
                 <TextInput
                   style={styles.textInput}
-                  value={editData}
-                  onChangeText={setEditData}
+                  value={editData.firstName}
+                  onChangeText={(text) => setEditData({...editData, firstName: text})}
+                  placeholder="Enter first name"
+                  placeholderTextColor={COLORS.GRAY_MEDIUM}
+                />
+              </View>
+
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>Last Name</Text>
+                <TextInput
+                  style={styles.textInput}
+                  value={editData.lastName}
+                  onChangeText={(text) => setEditData({...editData, lastName: text})}
+                  placeholder="Enter last name"
+                  placeholderTextColor={COLORS.GRAY_MEDIUM}
+                />
+              </View>
+
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>Specialization</Text>
+                <TextInput
+                  style={styles.textInput}
+                  value={editData.specialization}
+                  onChangeText={(text) => setEditData({...editData, specialization: text})}
+                  placeholder="Enter specialization"
+                  placeholderTextColor={COLORS.GRAY_MEDIUM}
+                />
+              </View>
+
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>License Number</Text>
+                <TextInput
+                  style={styles.textInput}
+                  value={editData.licenseNumber}
+                  onChangeText={(text) => setEditData({...editData, licenseNumber: text})}
+                  placeholder="Enter license number"
+                  placeholderTextColor={COLORS.GRAY_MEDIUM}
+                />
+              </View>
+
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>Years of Experience</Text>
+                <TextInput
+                  style={styles.textInput}
+                  value={editData.yearsOfExperience}
+                  onChangeText={(text) => setEditData({...editData, yearsOfExperience: text})}
+                  placeholder="Enter years of experience"
+                  keyboardType="numeric"
+                  placeholderTextColor={COLORS.GRAY_MEDIUM}
+                />
+              </View>
+
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>Consultation Fee (LKR)</Text>
+                <TextInput
+                  style={styles.textInput}
+                  value={editData.consultationFee}
+                  onChangeText={(text) => setEditData({...editData, consultationFee: text})}
                   placeholder="Enter consultation fee"
                   keyboardType="numeric"
                   placeholderTextColor={COLORS.GRAY_MEDIUM}
                 />
-              )}
-            </View>
+              </View>
+
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>Biography</Text>
+                <TextInput
+                  style={[styles.textInput, styles.textArea]}
+                  value={editData.bio}
+                  onChangeText={(text) => setEditData({...editData, bio: text})}
+                  placeholder="Enter your professional biography..."
+                  multiline
+                  numberOfLines={4}
+                  placeholderTextColor={COLORS.GRAY_MEDIUM}
+                />
+              </View>
+
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>Education (comma separated)</Text>
+                <TextInput
+                  style={[styles.textInput, styles.textArea]}
+                  value={editData.education.join(', ')}
+                  onChangeText={(text) => setEditData({...editData, education: text.split(',').map(item => item.trim())})}
+                  placeholder="Enter education details"
+                  multiline
+                  numberOfLines={3}
+                  placeholderTextColor={COLORS.GRAY_MEDIUM}
+                />
+              </View>
+
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>Certifications (comma separated)</Text>
+                <TextInput
+                  style={[styles.textInput, styles.textArea]}
+                  value={editData.certifications.join(', ')}
+                  onChangeText={(text) => setEditData({...editData, certifications: text.split(',').map(item => item.trim())})}
+                  placeholder="Enter certifications"
+                  multiline
+                  numberOfLines={3}
+                  placeholderTextColor={COLORS.GRAY_MEDIUM}
+                />
+              </View>
+
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>Languages (comma separated)</Text>
+                <TextInput
+                  style={styles.textInput}
+                  value={editData.languages.join(', ')}
+                  onChangeText={(text) => setEditData({...editData, languages: text.split(',').map(item => item.trim())})}
+                  placeholder="Enter languages"
+                  placeholderTextColor={COLORS.GRAY_MEDIUM}
+                />
+              </View>
+
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>Hospital Affiliations (comma separated)</Text>
+                <TextInput
+                  style={[styles.textInput, styles.textArea]}
+                  value={editData.hospitalAffiliations.join(', ')}
+                  onChangeText={(text) => setEditData({...editData, hospitalAffiliations: text.split(',').map(item => item.trim())})}
+                  placeholder="Enter hospital affiliations"
+                  multiline
+                  numberOfLines={3}
+                  placeholderTextColor={COLORS.GRAY_MEDIUM}
+                />
+              </View>
+
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>Achievements (comma separated)</Text>
+                <TextInput
+                  style={[styles.textInput, styles.textArea]}
+                  value={editData.achievements.join(', ')}
+                  onChangeText={(text) => setEditData({...editData, achievements: text.split(',').map(item => item.trim())})}
+                  placeholder="Enter achievements"
+                  multiline
+                  numberOfLines={3}
+                  placeholderTextColor={COLORS.GRAY_MEDIUM}
+                />
+              </View>
+            </ScrollView>
 
             <View style={styles.modalActions}>
               <Button
@@ -423,55 +558,42 @@ const DoctorProfileScreen = ({ navigation }) => {
           title="Biography"
           data={doctorData.bio}
           icon="document-text-outline"
-          onEdit={() => handleEditProfile('bio')}
         />
 
         <InfoSection
           title="Education & Training"
           data={doctorData.education}
           icon="school-outline"
-          onEdit={() => Alert.alert('Feature Coming Soon', 'Education management will be available soon.')}
         />
 
         <InfoSection
           title="Certifications"
           data={doctorData.certifications}
           icon="ribbon-outline"
-          onEdit={() => Alert.alert('Feature Coming Soon', 'Certification management will be available soon.')}
         />
 
         <InfoSection
           title="Languages"
           data={doctorData.languages}
           icon="language-outline"
-          onEdit={() => Alert.alert('Feature Coming Soon', 'Language management will be available soon.')}
         />
 
         <InfoSection
           title="Hospital Affiliations"
           data={doctorData.hospitalAffiliations}
           icon="business-outline"
-          onEdit={() => Alert.alert('Feature Coming Soon', 'Affiliation management will be available soon.')}
-        />
-
-        <InfoSection
-          title="Availability"
-          data={doctorData.availability}
-          icon="time-outline"
-          onEdit={() => Alert.alert('Feature Coming Soon', 'Schedule management will be available soon.')}
         />
 
         <InfoSection
           title="Achievements"
           data={doctorData.achievements}
           icon="trophy-outline"
-          onEdit={() => Alert.alert('Feature Coming Soon', 'Achievement management will be available soon.')}
         />
 
         <ActionButtons />
       </ScrollView>
 
-      <EditModal />
+      <EditProfileModal />
     </SafeAreaView>
   );
 };
@@ -677,7 +799,7 @@ const styles = StyleSheet.create({
     borderRadius: BORDER_RADIUS.LG,
     padding: SPACING.LG,
     width: '90%',
-    maxHeight: '70%',
+    maxHeight: '90%',
   },
   modalHeader: {
     flexDirection: 'row',
@@ -690,8 +812,18 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: COLORS.TEXT_PRIMARY,
   },
-  inputContainer: {
-    marginBottom: SPACING.LG,
+  formContainer: {
+    maxHeight: 400,
+    marginBottom: SPACING.MD,
+  },
+  inputGroup: {
+    marginBottom: SPACING.MD,
+  },
+  inputLabel: {
+    fontSize: FONT_SIZES.SM,
+    color: COLORS.TEXT_PRIMARY,
+    fontWeight: '600',
+    marginBottom: SPACING.XS,
   },
   textInput: {
     borderWidth: 1,
@@ -703,7 +835,7 @@ const styles = StyleSheet.create({
     color: COLORS.TEXT_PRIMARY,
   },
   textArea: {
-    height: 120,
+    height: 80,
     textAlignVertical: 'top',
   },
   modalActions: {

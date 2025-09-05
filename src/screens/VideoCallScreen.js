@@ -213,8 +213,11 @@ const VideoCallScreen = ({ navigation, route }) => {
   const handleChat = () => {
     // Navigate to chat while keeping call active (picture-in-picture mode)
     navigation.navigate('Chat', {
-      patientId: patientId || doctorId,
-      patientName: patientName || doctorName,
+      appointmentId: appointmentId,
+      doctorId: doctorId,
+      doctorName: doctorName,
+      patientId: patientId,
+      patientName: patientName,
       isVideoCallActive: true
     });
   };

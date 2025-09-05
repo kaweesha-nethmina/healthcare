@@ -7,7 +7,8 @@ import {
   ScrollView,
   TouchableOpacity,
   RefreshControl,
-  Alert
+  Alert,
+  Image
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
@@ -27,16 +28,45 @@ import {
 } from '../constants';
 import Card from '../components/Card';
 import Button from '../components/Button';
+import useProfilePicture from '../hooks/useProfilePicture';
 
 const MedicalHistoryScreen = ({ navigation }) => {
   const { user, userProfile } = useAuth();
+  const { fetchUserProfilePicture, getCachedProfilePicture } = useProfilePicture();
   const [medicalHistory, setMedicalHistory] = useState([]);
   const [refreshing, setRefreshing] = useState(false);
   const [filterType, setFilterType] = useState('all'); // all, appointments, lab-results, prescriptions, diagnoses
+  const [profilePicture, setProfilePicture] = useState(null);
 
   useEffect(() => {
     loadMedicalHistory();
+    loadProfilePicture();
   }, []);
+
+  const loadProfilePicture = async () => {
+    try {
+      if (user?.uid) {
+        // First check if we have it cached
+        const cachedPicture = getCachedProfilePicture(user.uid);
+        if (cachedPicture && cachedPicture !== null) {
+          setProfilePicture(cachedPicture);
+        } else {
+          // Fetch from Firestore if not cached
+          const pictureUrl = await fetchUserProfilePicture(user.uid);
+          if (pictureUrl && pictureUrl !== null) {
+            setProfilePicture(pictureUrl);
+          } else {
+            // Explicitly set to null if no picture found
+            setProfilePicture(null);
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error loading profile picture:', error);
+      // Set to null on error to show initials
+      setProfilePicture(null);
+    }
+  };
 
   const loadMedicalHistory = async () => {
     try {
@@ -225,7 +255,19 @@ const MedicalHistoryScreen = ({ navigation }) => {
       <Card style={styles.patientSummary}>
         <View style={styles.summaryHeader}>
           <View style={styles.patientAvatar}>
-            <Ionicons name="person" size={24} color={COLORS.WHITE} />
+            {profilePicture && profilePicture !== null ? (
+              <Image 
+                source={{ uri: profilePicture }} 
+                style={styles.patientAvatarImage}
+                onError={() => {
+                  console.log('Profile picture load error');
+                  // Fallback to initials if image fails to load
+                  setProfilePicture(null);
+                }}
+              />
+            ) : (
+              <Ionicons name="person" size={24} color={COLORS.WHITE} />
+            )}
           </View>
           <View style={styles.patientInfo}>
             <Text style={styles.patientName}>
@@ -376,6 +418,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginRight: SPACING.MD,
   },
+  
+  patientAvatarImage: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+  },
+  
   patientInfo: {
     flex: 1,
   },

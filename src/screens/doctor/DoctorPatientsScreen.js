@@ -187,11 +187,18 @@ const DoctorPatientsScreen = ({ navigation }) => {
         break;
       case 'chat':
         navigation.navigate('Chat', {
+          doctorId: userProfile?.uid,
+          doctorName: `${userProfile?.firstName || ''} ${userProfile?.lastName || ''}`.trim() || 'Doctor',
           patientId: patient.id,
           patientName: patient.name
         });
         break;
       case 'prescription':
+        console.log('Navigating to Prescriptions screen with params:', {
+          patientId: patient.id,
+          patientName: patient.name,
+          action: 'create'
+        });
         navigation.navigate('Prescriptions', {
           patientId: patient.id,
           patientName: patient.name,

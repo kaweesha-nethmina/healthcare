@@ -33,6 +33,8 @@ const Button = ({
       baseStyle.push(styles.emergency);
     } else if (variant === 'success') {
       baseStyle.push(styles.success);
+    } else if (variant === 'danger') {
+      baseStyle.push(styles.danger);
     }
     
     if (disabled) {
@@ -45,7 +47,7 @@ const Button = ({
   const getTextStyles = () => {
     const baseStyle = [styles.text, styles[`${size}Text`]];
     
-    if (variant === 'primary' || variant === 'emergency' || variant === 'success') {
+    if (variant === 'primary' || variant === 'emergency' || variant === 'success' || variant === 'danger') {
       baseStyle.push(styles.whiteText);
     } else if (variant === 'secondary') {
       baseStyle.push(styles.whiteText);
@@ -133,6 +135,9 @@ const styles = StyleSheet.create({
   },
   success: {
     backgroundColor: COLORS.SUCCESS,
+  },
+  danger: {
+    backgroundColor: COLORS.ERROR,
   },
   disabled: {
     backgroundColor: COLORS.GRAY_MEDIUM,

@@ -9,7 +9,9 @@ import {
   Alert,
   Switch,
   Modal,
-  TextInput
+  TextInput,
+  Platform,
+  Share
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
@@ -31,6 +33,22 @@ import {
 } from '../constants';
 import Card from '../components/Card';
 import Button from '../components/Button';
+
+// Conditional imports for PDF generation
+let RNHTMLtoPDF = null;
+
+// Only try to import these libraries on native platforms
+if (Platform.OS !== 'web') {
+  try {
+    import('react-native-html-to-pdf').then(module => {
+      RNHTMLtoPDF = module.default;
+    }).catch(err => {
+      console.log('react-native-html-to-pdf not available:', err);
+    });
+  } catch (error) {
+    console.log('Error importing PDF libraries:', error);
+  }
+}
 
 const PrescriptionScreen = ({ navigation }) => {
   const { user, userProfile } = useAuth();
@@ -279,94 +297,562 @@ const PrescriptionScreen = ({ navigation }) => {
     </TouchableOpacity>
   );
 
-  const PrescriptionCard = ({ prescription }) => (
-    <Card style={styles.prescriptionCard}>
-      <TouchableOpacity
-        onPress={() => {
-          setSelectedPrescription(prescription);
-          setDetailModalVisible(true);
-        }}
-      >
-        <View style={styles.prescriptionHeader}>
-          <View style={styles.medicationInfo}>
-            <View style={styles.medicationIcon}>
-              <Ionicons name="medical" size={24} color={COLORS.WHITE} />
+  const PrescriptionCard = ({ prescription }) => {
+    // Check if this prescription has multiple medications
+    const hasMultipleMedications = prescription.medications && prescription.medications.length > 1;
+    const displayMedication = hasMultipleMedications 
+      ? `${prescription.medications.length} medications` 
+      : (prescription.medicationName || 'N/A');
+
+    const displayDosage = hasMultipleMedications
+      ? 'Multiple dosages'
+      : (prescription.dosage || 'N/A');
+
+    const displayFrequency = hasMultipleMedications
+      ? 'Multiple frequencies'
+      : (prescription.frequency || 'N/A');
+
+    return (
+      <Card style={styles.prescriptionCard}>
+        <TouchableOpacity
+          onPress={() => {
+            setSelectedPrescription(prescription);
+            setDetailModalVisible(true);
+          }}
+        >
+          <View style={styles.prescriptionHeader}>
+            <View style={styles.medicationInfo}>
+              <View style={styles.medicationIcon}>
+                <Ionicons name="medical" size={24} color={COLORS.WHITE} />
+              </View>
+              <View style={styles.medicationDetails}>
+                <Text style={styles.medicationName}>{displayMedication}</Text>
+                <Text style={styles.medicationDosage}>
+                  {displayDosage} • {displayFrequency}
+                </Text>
+                <Text style={styles.prescribedBy}>Prescribed by {prescription.doctorName || 'N/A'}</Text>
+              </View>
             </View>
-            <View style={styles.medicationDetails}>
-              <Text style={styles.medicationName}>{prescription.medicationName}</Text>
-              <Text style={styles.medicationDosage}>
-                {prescription.dosage} • {prescription.frequency}
+            <View style={styles.prescriptionStatus}>
+              <View style={[styles.statusBadge, { backgroundColor: getStatusColor(prescription.status || 'unknown') }]}>
+                <Ionicons 
+                  name={getStatusIcon(prescription.status || 'unknown')} 
+                  size={16} 
+                  color={COLORS.WHITE} 
+                />
+                <Text style={styles.statusText}>{prescription.status || 'unknown'}</Text>
+              </View>
+            </View>
+          </View>
+
+          <View style={styles.prescriptionMeta}>
+            <View style={styles.metaItem}>
+              <Ionicons name="calendar-outline" size={16} color={COLORS.TEXT_SECONDARY} />
+              <Text style={styles.metaText}>
+                {prescription.startDate} - {prescription.endDate}
               </Text>
-              <Text style={styles.prescribedBy}>Prescribed by {prescription.doctorName}</Text>
+            </View>
+            <View style={styles.metaItem}>
+              <Ionicons name="time-outline" size={16} color={COLORS.TEXT_SECONDARY} />
+              <Text style={styles.metaText}>
+                Next: {prescription.nextDose || 'N/A'}
+              </Text>
             </View>
           </View>
-          <View style={styles.prescriptionStatus}>
-            <View style={[styles.statusBadge, { backgroundColor: getStatusColor(prescription.status) }]}>
-              <Ionicons 
-                name={getStatusIcon(prescription.status)} 
-                size={16} 
-                color={COLORS.WHITE} 
+
+          {prescription.status === 'active' && (
+            <View style={styles.todayDoses}>
+              <Text style={styles.dosesTitle}>Today's Doses</Text>
+              <View style={styles.dosesContainer}>
+                {prescription.doseTimes?.map((dose, index) => (
+                  <TouchableOpacity
+                    key={index}
+                    style={[styles.doseButton, dose.taken && styles.doseTaken]}
+                    onPress={() => !dose.taken && markAsTaken(prescription.id, dose.time)}
+                  >
+                    <Text style={[styles.doseTime, dose.taken && styles.doseTimeTaken]}>
+                      {dose.time}
+                    </Text>
+                    {dose.taken && (
+                      <Ionicons name="checkmark" size={16} color={COLORS.WHITE} />
+                    )}
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+          )}
+
+          <View style={styles.prescriptionActions}>
+            <View style={styles.reminderToggle}>
+              <Text style={styles.reminderText}>Reminders</Text>
+              <Switch
+                value={reminderSettings[prescription.id] || false}
+                onValueChange={() => toggleReminder(prescription.id)}
+                trackColor={{ false: COLORS.GRAY_LIGHT, true: COLORS.PRIMARY }}
+                thumbColor={COLORS.WHITE}
               />
-              <Text style={styles.statusText}>{prescription.status}</Text>
             </View>
+            <TouchableOpacity style={styles.actionButton}>
+              <Ionicons name="information-circle-outline" size={20} color={COLORS.PRIMARY} />
+              <Text style={styles.actionButtonText}>Details</Text>
+            </TouchableOpacity>
           </View>
-        </View>
+        </TouchableOpacity>
+      </Card>
+    );
+  };
 
-        <View style={styles.prescriptionMeta}>
-          <View style={styles.metaItem}>
-            <Ionicons name="calendar-outline" size={16} color={COLORS.TEXT_SECONDARY} />
-            <Text style={styles.metaText}>
-              {prescription.startDate} - {prescription.endDate}
-            </Text>
-          </View>
-          <View style={styles.metaItem}>
-            <Ionicons name="time-outline" size={16} color={COLORS.TEXT_SECONDARY} />
-            <Text style={styles.metaText}>
-              Next: {prescription.nextDose || 'N/A'}
-            </Text>
-          </View>
-        </View>
+  // Function to generate HTML for prescription PDF
+  const generatePrescriptionHTML = (prescription) => {
+    // Check if prescription is valid
+    if (!prescription) {
+      return '<h1>Error: No prescription data</h1>';
+    }
 
-        {prescription.status === 'active' && (
-          <View style={styles.todayDoses}>
-            <Text style={styles.dosesTitle}>Today's Doses</Text>
-            <View style={styles.dosesContainer}>
-              {prescription.doseTimes?.map((dose, index) => (
-                <TouchableOpacity
-                  key={index}
-                  style={[styles.doseButton, dose.taken && styles.doseTaken]}
-                  onPress={() => !dose.taken && markAsTaken(prescription.id, dose.time)}
-                >
-                  <Text style={[styles.doseTime, dose.taken && styles.doseTimeTaken]}>
-                    {dose.time}
-                  </Text>
-                  {dose.taken && (
-                    <Ionicons name="checkmark" size={16} color={COLORS.WHITE} />
-                  )}
-                </TouchableOpacity>
-              ))}
-            </View>
-          </View>
-        )}
+    const formatDate = (dateString) => {
+      if (!dateString) return 'N/A';
+      const date = new Date(dateString);
+      return date.toLocaleDateString();
+    };
 
-        <View style={styles.prescriptionActions}>
-          <View style={styles.reminderToggle}>
-            <Text style={styles.reminderText}>Reminders</Text>
-            <Switch
-              value={reminderSettings[prescription.id] || false}
-              onValueChange={() => toggleReminder(prescription.id)}
-              trackColor={{ false: COLORS.GRAY_LIGHT, true: COLORS.PRIMARY }}
-              thumbColor={COLORS.WHITE}
-            />
-          </View>
-          <TouchableOpacity style={styles.actionButton}>
-            <Ionicons name="information-circle-outline" size={20} color={COLORS.PRIMARY} />
-            <Text style={styles.actionButtonText}>Details</Text>
-          </TouchableOpacity>
-        </View>
-      </TouchableOpacity>
-    </Card>
-  );
+    let medicationsHTML = '';
+    
+    if (prescription.medications && prescription.medications.length > 0) {
+      medicationsHTML = `
+        <h3>Medications (${prescription.medications.length})</h3>
+        <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
+          <thead>
+            <tr style="background-color: #2E86AB; color: white;">
+              <th style="padding: 12px; text-align: left; border: 1px solid #ddd;">Medication</th>
+              <th style="padding: 12px; text-align: left; border: 1px solid #ddd;">Dosage</th>
+              <th style="padding: 12px; text-align: left; border: 1px solid #ddd;">Frequency</th>
+              <th style="padding: 12px; text-align: left; border: 1px solid #ddd;">Instructions</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${prescription.medications.map((med, index) => `
+              <tr style="background-color: ${index % 2 === 0 ? '#f9f9f9' : '#ffffff'};">
+                <td style="padding: 12px; border: 1px solid #ddd;">${med.medicationName || 'N/A'}</td>
+                <td style="padding: 12px; border: 1px solid #ddd;">${med.dosage || 'N/A'}</td>
+                <td style="padding: 12px; border: 1px solid #ddd;">${med.frequency || 'N/A'}</td>
+                <td style="padding: 12px; border: 1px solid #ddd;">${med.instructions || 'N/A'}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      `;
+    } else {
+      medicationsHTML = `
+        <div style="margin-bottom: 20px;">
+          <h3>Medication Details</h3>
+          <table style="width: 100%; border-collapse: collapse;">
+            <tr>
+              <td style="padding: 10px; border: 1px solid #ddd; font-weight: bold; width: 30%;">Medication Name:</td>
+              <td style="padding: 10px; border: 1px solid #ddd;">${prescription.medicationName || 'N/A'}</td>
+            </tr>
+            <tr style="background-color: #f9f9f9;">
+              <td style="padding: 10px; border: 1px solid #ddd; font-weight: bold;">Dosage:</td>
+              <td style="padding: 10px; border: 1px solid #ddd;">${prescription.dosage || 'N/A'}</td>
+            </tr>
+            <tr>
+              <td style="padding: 10px; border: 1px solid #ddd; font-weight: bold;">Frequency:</td>
+              <td style="padding: 10px; border: 1px solid #ddd;">${prescription.frequency || 'N/A'}</td>
+            </tr>
+            <tr style="background-color: #f9f9f9;">
+              <td style="padding: 10px; border: 1px solid #ddd; font-weight: bold;">Instructions:</td>
+              <td style="padding: 10px; border: 1px solid #ddd;">${prescription.instructions || 'N/A'}</td>
+            </tr>
+          </table>
+        </div>
+      `;
+    }
+
+    return `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="utf-8">
+          <title>Prescription Details</title>
+          <style>
+            body { 
+              font-family: Arial, sans-serif; 
+              margin: 30px; 
+              color: #333;
+              line-height: 1.6;
+            }
+            .header { 
+              text-align: center; 
+              margin-bottom: 30px; 
+              padding-bottom: 20px;
+              border-bottom: 2px solid #2E86AB;
+            }
+            .logo {
+              color: #2E86AB;
+              font-size: 28px;
+              font-weight: bold;
+              margin-bottom: 5px;
+            }
+            .subtitle { 
+              font-size: 20px; 
+              color: #666; 
+              margin-top: 5px; 
+            }
+            .section { 
+              margin-bottom: 25px; 
+              padding: 15px;
+              border-radius: 8px;
+              background-color: #f8f9fa;
+            }
+            .section-title { 
+              font-size: 20px; 
+              font-weight: bold; 
+              color: #2E86AB; 
+              margin-bottom: 15px;
+              padding-bottom: 8px;
+              border-bottom: 1px solid #eee;
+            }
+            .info-row { 
+              margin-bottom: 12px; 
+              display: flex;
+            }
+            .info-label { 
+              font-weight: bold; 
+              width: 200px;
+              min-width: 200px;
+            }
+            .info-value { 
+              flex: 1;
+            }
+            table { 
+              width: 100%; 
+              border-collapse: collapse;
+              margin: 15px 0;
+            }
+            th, td { 
+              padding: 12px; 
+              text-align: left; 
+              border: 1px solid #ddd; 
+            }
+            th { 
+              background-color: #2E86AB; 
+              color: white; 
+            }
+            tr:nth-child(even) { 
+              background-color: #f9f9f9; 
+            }
+            .footer {
+              margin-top: 40px; 
+              text-align: center; 
+              font-size: 12px; 
+              color: #888;
+              padding-top: 20px;
+              border-top: 1px solid #eee;
+            }
+            .signature-area {
+              margin-top: 50px;
+              display: flex;
+              justify-content: space-between;
+            }
+            .signature-box {
+              width: 45%;
+              border-top: 1px solid #333;
+              padding-top: 10px;
+              text-align: center;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <div class="logo">LifeLine+ Healthcare</div>
+            <div class="subtitle">Prescription Details</div>
+          </div>
+          
+          <div class="section">
+            <div class="section-title">Patient Information</div>
+            <div class="info-row">
+              <span class="info-label">Patient Name:</span>
+              <span class="info-value">${userProfile?.firstName || ''} ${userProfile?.lastName || ''}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">Patient ID:</span>
+              <span class="info-value">${userProfile?.id || 'N/A'}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">Prescription ID:</span>
+              <span class="info-value">${prescription.id || 'N/A'}</span>
+            </div>
+          </div>
+          
+          <div class="section">
+            <div class="section-title">Doctor Information</div>
+            <div class="info-row">
+              <span class="info-label">Doctor Name:</span>
+              <span class="info-value">${prescription.doctorName || 'N/A'}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">License Number:</span>
+              <span class="info-value">${prescription.doctorLicense || 'N/A'}</span>
+            </div>
+          </div>
+          
+          <div class="section">
+            ${medicationsHTML}
+          </div>
+          
+          <div class="section">
+            <div class="section-title">Prescription Details</div>
+            <div class="info-row">
+              <span class="info-label">Start Date:</span>
+              <span class="info-value">${formatDate(prescription.startDate)}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">End Date:</span>
+              <span class="info-value">${formatDate(prescription.endDate)}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">Duration:</span>
+              <span class="info-value">${prescription.duration || 'N/A'} days</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">Refills:</span>
+              <span class="info-value">${prescription.refillsRemaining || 0} of ${prescription.refills || 0} refills remaining</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">Status:</span>
+              <span class="info-value">${prescription.status || 'N/A'}</span>
+            </div>
+          </div>
+          
+          ${prescription.sideEffects ? `
+          <div class="section">
+            <div class="section-title">Possible Side Effects</div>
+            <p>${prescription.sideEffects}</p>
+          </div>
+          ` : ''}
+          
+          ${prescription.notes ? `
+          <div class="section">
+            <div class="section-title">Additional Notes</div>
+            <p>${prescription.notes}</p>
+          </div>
+          ` : ''}
+          
+          <div class="signature-area">
+            <div class="signature-box">
+              Doctor's Signature
+            </div>
+            <div class="signature-box">
+              Date
+            </div>
+          </div>
+          
+          <div class="footer">
+            <p>This is an electronically generated prescription. Please consult your doctor if you have any questions.</p>
+            <p>© ${new Date().getFullYear()} LifeLine+ Healthcare. All rights reserved.</p>
+          </div>
+        </body>
+      </html>
+    `;
+  };
+
+  // Function to download prescription as PDF
+  const downloadPrescription = async (prescription) => {
+    try {
+      // Check if prescription is valid
+      if (!prescription) {
+        Alert.alert('Error', 'No prescription selected');
+        return;
+      }
+
+      // Check if we're on a platform that supports PDF generation
+      if (Platform.OS === 'web') {
+        // For web, use the share functionality as PDF generation is not supported
+        Alert.alert(
+          'Download Not Available',
+          'PDF download is not available on web. Sharing prescription details instead.',
+          [
+            {
+              text: 'OK',
+              onPress: () => sharePrescription(prescription)
+            }
+          ]
+        );
+        return;
+      }
+
+      // Check if the required libraries are available
+      if (!RNHTMLtoPDF) {
+        // Try to import again if not already imported
+        try {
+          const module = await import('react-native-html-to-pdf');
+          RNHTMLtoPDF = module.default;
+        } catch (importError) {
+          console.log('Error importing react-native-html-to-pdf:', importError);
+        }
+      }
+
+      if (!RNHTMLtoPDF) {
+        // Fallback to share if PDF library is not available
+        Alert.alert(
+          'PDF Generation Not Available',
+          'PDF generation library is not available. Sharing prescription details instead.',
+          [
+            {
+              text: 'OK',
+              onPress: () => sharePrescription(prescription)
+            }
+          ]
+        );
+        return;
+      }
+
+      // Show loading indicator
+      Alert.alert('Generating PDF', 'Please wait while we generate your prescription PDF...', [
+        { text: 'Cancel', style: 'cancel' }
+      ]);
+
+      const options = {
+        html: generatePrescriptionHTML(prescription),
+        fileName: `prescription_${prescription.id || Date.now()}`,
+        directory: 'Documents',
+        height: 800,
+        width: 600
+      };
+
+      const file = await RNHTMLtoPDF.convert(options);
+      
+      Alert.alert(
+        'Download Complete',
+        `Prescription saved to: ${file.filePath}`,
+        [
+          { text: 'OK' },
+          {
+            text: 'Share File',
+            onPress: async () => {
+              try {
+                // Use Share to share the PDF file
+                await Share.share({
+                  url: file.filePath,
+                  title: `Prescription - ${prescription.id || 'Unknown'}`
+                });
+              } catch (error) {
+                console.log('Error sharing file:', error);
+                Alert.alert('File Location', `Your prescription is saved at: ${file.filePath}`);
+              }
+            }
+          }
+        ]
+      );
+      
+    } catch (error) {
+      console.error('Error downloading prescription:', error);
+      Alert.alert(
+        'Download Error',
+        `Failed to generate prescription PDF: ${error.message || 'Unknown error'}\n\nSharing prescription details instead.`,
+        [
+          {
+            text: 'OK',
+            onPress: () => sharePrescription(prescription)
+          }
+        ]
+      );
+    }
+  };
+
+  // Function to generate text format for prescription sharing
+  const generatePrescriptionText = (prescription) => {
+    const formatDate = (dateString) => {
+      if (!dateString) return 'N/A';
+      const date = new Date(dateString);
+      return date.toLocaleDateString();
+    };
+
+    let medicationsText = '';
+    
+    if (prescription.medications && prescription.medications.length > 0) {
+      medicationsText = `\nMedications (${prescription.medications.length}):\n`;
+      medicationsText += '='.repeat(50) + '\n';
+      prescription.medications.forEach((med, index) => {
+        medicationsText += `\n${index + 1}. ${med.medicationName || 'N/A'}\n`;
+        medicationsText += `   Dosage: ${med.dosage || 'N/A'}\n`;
+        medicationsText += `   Frequency: ${med.frequency || 'N/A'}\n`;
+        if (med.instructions) {
+          medicationsText += `   Instructions: ${med.instructions}\n`;
+        }
+        medicationsText += '-'.repeat(30) + '\n';
+      });
+    } else {
+      medicationsText = '\nMedication Details:\n';
+      medicationsText += '='.repeat(50) + '\n';
+      medicationsText += `Medication Name: ${prescription.medicationName || 'N/A'}\n`;
+      medicationsText += `Dosage: ${prescription.dosage || 'N/A'}\n`;
+      medicationsText += `Frequency: ${prescription.frequency || 'N/A'}\n`;
+      if (prescription.instructions) {
+        medicationsText += `Instructions: ${prescription.instructions || 'N/A'}\n`;
+      }
+    }
+
+    return `
+LifeLine+ Healthcare
+====================
+Prescription Details
+====================
+
+Patient Information:
+--------------------
+Patient Name: ${userProfile?.firstName || ''} ${userProfile?.lastName || ''}
+Patient ID: ${userProfile?.id || 'N/A'}
+Prescription ID: ${prescription.id || 'N/A'}
+
+Doctor Information:
+-------------------
+Doctor Name: ${prescription.doctorName || 'N/A'}
+License Number: ${prescription.doctorLicense || 'N/A'}
+
+${medicationsText}
+
+Prescription Details:
+---------------------
+Start Date: ${formatDate(prescription.startDate)}
+End Date: ${formatDate(prescription.endDate)}
+Duration: ${prescription.duration || 'N/A'} days
+Refills: ${prescription.refillsRemaining || 0} of ${prescription.refills || 0} refills remaining
+Status: ${prescription.status || 'N/A'}
+
+${prescription.sideEffects ? `Possible Side Effects:\n${prescription.sideEffects}\n\n` : ''}
+${prescription.notes ? `Additional Notes:\n${prescription.notes}\n\n` : ''}
+
+Doctor's Signature: _________________     Date: _________________
+
+This is an electronically generated prescription. Please consult your doctor if you have any questions.
+
+© ${new Date().getFullYear()} LifeLine+ Healthcare. All rights reserved.
+`;
+  };
+
+  // Function to share prescription
+  const sharePrescription = async (prescription) => {
+    try {
+      // Check if prescription is valid
+      if (!prescription) {
+        Alert.alert('Error', 'No prescription selected');
+        return;
+      }
+
+      const prescriptionText = generatePrescriptionText(prescription);
+      
+      await Share.share({
+        message: prescriptionText,
+        title: `Prescription - ${prescription.id || 'Unknown'}`
+      });
+    } catch (error) {
+      console.error('Error sharing prescription:', error);
+      Alert.alert(
+        'Share Error',
+        'Failed to share prescription. Please try again later.'
+      );
+    }
+  };
 
   const PrescriptionDetailModal = () => (
     <Modal
@@ -378,36 +864,76 @@ const PrescriptionScreen = ({ navigation }) => {
       <SafeAreaView style={styles.modalContainer}>
         <View style={styles.modalHeader}>
           <Text style={styles.modalTitle}>Prescription Details</Text>
-          <TouchableOpacity
-            style={styles.closeButton}
-            onPress={() => setDetailModalVisible(false)}
-          >
-            <Ionicons name="close" size={24} color={COLORS.TEXT_PRIMARY} />
-          </TouchableOpacity>
+          <View style={styles.modalHeaderActions}>
+            <TouchableOpacity
+              style={styles.downloadButton}
+              onPress={() => downloadPrescription(selectedPrescription)}
+            >
+              <Ionicons name="download-outline" size={24} color={COLORS.PRIMARY} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.downloadButton}
+              onPress={() => sharePrescription(selectedPrescription)}
+            >
+              <Ionicons name="share-outline" size={24} color={COLORS.PRIMARY} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.closeButton}
+              onPress={() => setDetailModalVisible(false)}
+            >
+              <Ionicons name="close" size={24} color={COLORS.TEXT_PRIMARY} />
+            </TouchableOpacity>
+          </View>
         </View>
         
         {selectedPrescription && (
           <ScrollView style={styles.modalContent}>
             <Card style={styles.detailCard}>
-              <Text style={styles.detailMedicationName}>
-                {selectedPrescription.medicationName}
-              </Text>
-              <Text style={styles.detailDosage}>{selectedPrescription.dosage}</Text>
-              
-              <View style={styles.detailSection}>
-                <Text style={styles.detailSectionTitle}>Instructions</Text>
-                <Text style={styles.detailText}>{selectedPrescription.instructions}</Text>
-              </View>
-              
-              <View style={styles.detailSection}>
-                <Text style={styles.detailSectionTitle}>Frequency</Text>
-                <Text style={styles.detailText}>{selectedPrescription.frequency}</Text>
-              </View>
+              {/* Check if this is a multi-medication prescription */}
+              {selectedPrescription.medications && selectedPrescription.medications.length > 0 ? (
+                <>
+                  <Text style={styles.detailMedicationName}>
+                    Prescription with {selectedPrescription.medications.length} Medications
+                  </Text>
+                  {selectedPrescription.medications.map((med, index) => (
+                    <View key={index} style={styles.detailSection}>
+                      <Text style={[styles.detailSectionTitle, { marginBottom: SPACING.XS }]}>
+                        Medication #{index + 1}: {med.medicationName}
+                      </Text>
+                      <Text style={styles.detailText}>Dosage: {med.dosage}</Text>
+                      <Text style={styles.detailText}>Frequency: {med.frequency}</Text>
+                      {med.instructions && (
+                        <Text style={styles.detailText}>Instructions: {med.instructions}</Text>
+                      )}
+                    </View>
+                  ))}
+                </>
+              ) : (
+                <>
+                  <Text style={styles.detailMedicationName}>
+                    {selectedPrescription.medicationName}
+                  </Text>
+                  <Text style={styles.detailDosage}>{selectedPrescription.dosage}</Text>
+                  
+                  <View style={styles.detailSection}>
+                    <Text style={styles.detailSectionTitle}>Instructions</Text>
+                    <Text style={styles.detailText}>{selectedPrescription.instructions}</Text>
+                  </View>
+                  
+                  <View style={styles.detailSection}>
+                    <Text style={styles.detailSectionTitle}>Frequency</Text>
+                    <Text style={styles.detailText}>{selectedPrescription.frequency}</Text>
+                  </View>
+                </>
+              )}
               
               <View style={styles.detailSection}>
                 <Text style={styles.detailSectionTitle}>Duration</Text>
                 <Text style={styles.detailText}>
                   {selectedPrescription.startDate} to {selectedPrescription.endDate}
+                </Text>
+                <Text style={styles.detailSubtext}>
+                  Duration: {selectedPrescription.duration || 'N/A'} days
                 </Text>
               </View>
               
@@ -417,7 +943,7 @@ const PrescriptionScreen = ({ navigation }) => {
                   {selectedPrescription.doctorName}
                 </Text>
                 <Text style={styles.detailSubtext}>
-                  {selectedPrescription.prescriptionDate}
+                  License: {selectedPrescription.doctorLicense || 'N/A'}
                 </Text>
               </View>
               
@@ -877,6 +1403,14 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZES.XL,
     fontWeight: 'bold',
     color: COLORS.TEXT_PRIMARY,
+  },
+  modalHeaderActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  downloadButton: {
+    padding: SPACING.SM,
+    marginRight: SPACING.XS,
   },
   closeButton: {
     padding: SPACING.SM,

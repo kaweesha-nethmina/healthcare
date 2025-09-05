@@ -388,7 +388,7 @@ const BookingScreen = ({ navigation, route }) => {
               <View style={styles.consultationFee}>
                 <Ionicons name="card" size={16} color={COLORS.SUCCESS} />
                 <Text style={styles.feeText}>
-                  Consultation: ${doctorData?.consultationFee || doctor.consultationFee}
+                  Consultation: LKR {doctorData?.consultationFee || doctor.consultationFee}
                 </Text>
               </View>
             </View>
@@ -544,7 +544,7 @@ const BookingScreen = ({ navigation, route }) => {
             <View style={styles.summaryRow}>
               <Text style={styles.summaryLabel}>Fee:</Text>
               <Text style={[styles.summaryValue, styles.feeAmount]}>
-                ${doctorData?.consultationFee || doctor.consultationFee}
+                LKR {doctorData?.consultationFee || doctor.consultationFee}
               </Text>
             </View>
           </Card>

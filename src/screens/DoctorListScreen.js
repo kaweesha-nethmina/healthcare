@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -8,7 +8,8 @@ import {
   TouchableOpacity,
   TextInput,
   Alert,
-  ActivityIndicator
+  ActivityIndicator,
+  Image
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
@@ -29,6 +30,104 @@ import {
 } from '../constants';
 import Card from '../components/Card';
 import Button from '../components/Button';
+import useProfilePicture from '../hooks/useProfilePicture';
+
+// Separate DoctorCard component to avoid re-creating it on every render
+const DoctorCard = ({ doctor, onViewProfile, onBookAppointment, chatMode }) => {
+  const { fetchUserProfilePicture, getCachedProfilePicture } = useProfilePicture();
+  const [profilePicture, setProfilePicture] = useState(null);
+  const [loadingProfilePicture, setLoadingProfilePicture] = useState(false);
+
+  // Fetch profile picture when component mounts or when doctor.id changes
+  useEffect(() => {
+    const loadProfilePicture = async () => {
+      if (doctor.id) {
+        setLoadingProfilePicture(true);
+        try {
+          // First check if we have it cached
+          const cachedPicture = getCachedProfilePicture(doctor.id);
+          if (cachedPicture && cachedPicture !== null) {
+            setProfilePicture(cachedPicture);
+          } else {
+            // Fetch from Firestore if not cached
+            const pictureUrl = await fetchUserProfilePicture(doctor.id);
+            if (pictureUrl && pictureUrl !== null) {
+              setProfilePicture(pictureUrl);
+            } else {
+              // Explicitly set to null if no picture found
+              setProfilePicture(null);
+            }
+          }
+        } catch (error) {
+          console.error('Error loading profile picture:', error);
+          // Set to null on error to show initials
+          setProfilePicture(null);
+        } finally {
+          setLoadingProfilePicture(false);
+        }
+      }
+    };
+
+    loadProfilePicture();
+  }, [doctor.id, getCachedProfilePicture, fetchUserProfilePicture]);
+
+  return (
+    <Card style={styles.doctorCard}>
+      <View style={styles.doctorHeader}>
+        <View style={styles.doctorAvatar}>
+          {profilePicture && profilePicture !== null ? (
+            <Image 
+              source={{ uri: profilePicture }} 
+              style={styles.doctorAvatarImage}
+              onError={() => {
+                console.log('Profile picture load error for doctor:', doctor.id);
+                // Fallback to initials if image fails to load
+                setProfilePicture(null);
+              }}
+            />
+          ) : (
+            <Ionicons name="person" size={32} color={COLORS.WHITE} />
+          )}
+        </View>
+        <View style={styles.doctorInfo}>
+          <Text style={styles.doctorName}>{doctor.name}</Text>
+          <Text style={styles.doctorSpecialization}>{doctor.specialization}</Text>
+          <View style={styles.ratingContainer}>
+            <Ionicons name="star" size={16} color={COLORS.WARNING} />
+            <Text style={styles.rating}>{doctor.rating}</Text>
+            <Text style={styles.reviewCount}>({doctor.reviewCount} reviews)</Text>
+          </View>
+        </View>
+        <View style={styles.availabilityContainer}>
+          <View style={[
+            styles.availabilityBadge,
+            { backgroundColor: doctor.availableNow ? COLORS.SUCCESS : COLORS.GRAY_MEDIUM }
+          ]}>
+            <Text style={styles.availabilityText}>
+              {doctor.availableNow ? 'Available' : 'Offline'}
+            </Text>
+          </View>
+        </View>
+      </View>
+      
+      <View style={styles.doctorActions}>
+        <Button
+          title={chatMode ? "Chat Now" : "View Profile"}
+          variant="outline"
+          size="small"
+          onPress={() => onViewProfile(doctor)}
+          style={styles.actionButton}
+        />
+        <Button
+          title={chatMode ? "Start Chat" : "Book Appointment"}
+          size="small"
+          onPress={() => onBookAppointment(doctor)}
+          style={styles.actionButton}
+        />
+      </View>
+    </Card>
+  );
+};
 
 const DoctorListScreen = ({ navigation, route }) => {
   const { userProfile } = useAuth();
@@ -225,51 +324,6 @@ const DoctorListScreen = ({ navigation, route }) => {
     }
   };
 
-  const DoctorCard = ({ doctor }) => (
-    <Card style={styles.doctorCard}>
-      <View style={styles.doctorHeader}>
-        <View style={styles.doctorAvatar}>
-          <Ionicons name="person" size={32} color={COLORS.WHITE} />
-        </View>
-        <View style={styles.doctorInfo}>
-          <Text style={styles.doctorName}>{doctor.name}</Text>
-          <Text style={styles.doctorSpecialization}>{doctor.specialization}</Text>
-          <View style={styles.ratingContainer}>
-            <Ionicons name="star" size={16} color={COLORS.WARNING} />
-            <Text style={styles.rating}>{doctor.rating}</Text>
-            <Text style={styles.reviewCount}>({doctor.reviewCount} reviews)</Text>
-          </View>
-        </View>
-        <View style={styles.availabilityContainer}>
-          <View style={[
-            styles.availabilityBadge,
-            { backgroundColor: doctor.availableNow ? COLORS.SUCCESS : COLORS.GRAY_MEDIUM }
-          ]}>
-            <Text style={styles.availabilityText}>
-              {doctor.availableNow ? 'Available' : 'Offline'}
-            </Text>
-          </View>
-        </View>
-      </View>
-      
-      <View style={styles.doctorActions}>
-        <Button
-          title={chatMode ? "Chat Now" : "View Profile"}
-          variant="outline"
-          size="small"
-          onPress={() => handleViewProfile(doctor)}
-          style={styles.actionButton}
-        />
-        <Button
-          title={chatMode ? "Start Chat" : "Book Appointment"}
-          size="small"
-          onPress={() => handleBookAppointment(doctor)}
-          style={styles.actionButton}
-        />
-      </View>
-    </Card>
-  );
-
   const SpecializationChip = ({ specialization, isSelected, onPress }) => (
     <TouchableOpacity
       style={[
@@ -438,7 +492,13 @@ const DoctorListScreen = ({ navigation, route }) => {
             </View>
           ) : (
             filteredDoctors.map((doctor) => (
-              <DoctorCard key={doctor.id} doctor={doctor} />
+              <DoctorCard 
+                key={doctor.id} 
+                doctor={doctor} 
+                onViewProfile={handleViewProfile}
+                onBookAppointment={handleBookAppointment}
+                chatMode={chatMode}
+              />
             ))
           )}
         </ScrollView>
@@ -565,6 +625,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginRight: SPACING.MD,
   },
+  
+  doctorAvatarImage: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+  },
+  
   doctorInfo: {
     flex: 1,
   },
