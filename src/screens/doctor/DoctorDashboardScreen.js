@@ -7,7 +7,8 @@ import {
   ScrollView,
   TouchableOpacity,
   RefreshControl,
-  Alert
+  Alert,
+  Image
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../context/AuthContext';
@@ -32,9 +33,11 @@ import {
 } from '../../constants';
 import Card from '../../components/Card';
 import Button from '../../components/Button';
+import useProfilePicture from '../../hooks/useProfilePicture';
 
 const DoctorDashboardScreen = ({ navigation }) => {
   const { userProfile } = useAuth();
+  const { fetchUserProfilePicture, getCachedProfilePicture } = useProfilePicture();
   const [dashboardData, setDashboardData] = useState({
     todayAppointments: [],
     pendingRequests: [],
@@ -215,7 +218,8 @@ const DoctorDashboardScreen = ({ navigation }) => {
           reason: data.reason || 'No reason provided',
           timeAgo: data.timeAgo || 'Unknown time',
           appointmentDate: data.appointmentDate || null,
-          appointmentTime: data.appointmentTime || null
+          appointmentTime: data.appointmentTime || null,
+          patientId: data.patientId || null
         });
       });
       
@@ -388,40 +392,93 @@ const DoctorDashboardScreen = ({ navigation }) => {
     }
   };
 
-  const AppointmentCard = ({ appointment }) => (
-    <Card style={styles.appointmentCard}>
-      <View style={styles.appointmentHeader}>
-        <View style={styles.patientInfo}>
-          <View style={styles.patientAvatar}>
-            <Text style={styles.patientInitial}>
-              {appointment.patientName.charAt(0)}
-            </Text>
+  const AppointmentCard = ({ appointment }) => {
+    const [profilePicture, setProfilePicture] = useState(null);
+    const [loadingProfilePicture, setLoadingProfilePicture] = useState(false);
+
+    // Fetch profile picture when component mounts or when appointment.patientId changes
+    useEffect(() => {
+      const loadProfilePicture = async () => {
+        if (appointment.patientId) {
+          console.log('Loading profile picture for patient:', appointment.patientId);
+          setLoadingProfilePicture(true);
+          try {
+            // First check if we have it cached
+            const cachedPicture = getCachedProfilePicture(appointment.patientId);
+            console.log('Cached picture:', cachedPicture);
+            if (cachedPicture && cachedPicture !== null) {
+              setProfilePicture(cachedPicture);
+            } else {
+              // Fetch from Firestore if not cached
+              const pictureUrl = await fetchUserProfilePicture(appointment.patientId);
+              console.log('Fetched picture URL:', pictureUrl);
+              if (pictureUrl && pictureUrl !== null) {
+                setProfilePicture(pictureUrl);
+              } else {
+                // Explicitly set to null if no picture found
+                setProfilePicture(null);
+              }
+            }
+          } catch (error) {
+            console.error('Error loading profile picture:', error);
+            // Set to null on error to show initials
+            setProfilePicture(null);
+          } finally {
+            setLoadingProfilePicture(false);
+          }
+        }
+      };
+
+      loadProfilePicture();
+    }, [appointment.patientId, getCachedProfilePicture, fetchUserProfilePicture]);
+
+    return (
+      <Card style={styles.appointmentCard}>
+        <View style={styles.appointmentHeader}>
+          <View style={styles.patientInfo}>
+            <View style={styles.patientAvatar}>
+              {profilePicture && profilePicture !== null ? (
+                <Image 
+                  source={{ uri: profilePicture }} 
+                  style={styles.patientAvatarImage}
+                  onError={() => {
+                    console.log('Profile picture load error for patient:', appointment.patientId);
+                    // Fallback to initials if image fails to load
+                    setProfilePicture(null);
+                  }}
+                />
+              ) : (
+                <Text style={styles.patientInitial}>
+                  {appointment.patientName ? appointment.patientName.charAt(0) : 'U'}
+                </Text>
+              )}
+            </View>
+            <View style={styles.appointmentDetails}>
+              <Text style={styles.patientName}>{appointment.patientName || 'Unknown Patient'}</Text>
+              <Text style={styles.appointmentTime}>
+                {formatAppointmentDateTime(appointment.appointmentDate, appointment.appointmentTime) || 'N/A'} • {appointment.type || 'Consultation'}
+              </Text>
+              <Text style={styles.appointmentReason}>{appointment.symptoms || appointment.reason || 'No symptoms provided'}</Text>
+            </View>
           </View>
-          <View style={styles.appointmentDetails}>
-            <Text style={styles.patientName}>{appointment.patientName || 'Unknown Patient'}</Text>
-            <Text style={styles.appointmentTime}>
-              {formatAppointmentDateTime(appointment.appointmentDate, appointment.appointmentTime) || 'N/A'} • {appointment.type || 'Consultation'}
-            </Text>
-            <Text style={styles.appointmentReason}>{appointment.symptoms || appointment.reason || 'No symptoms provided'}</Text>
+          <View style={styles.appointmentActions}>
+            <TouchableOpacity 
+              style={styles.actionBtn}
+              onPress={() => navigation.navigate('Appointments', { screen: 'AppointmentsMain' })}
+            >
+              <Ionicons name="calendar" size={20} color={COLORS.PRIMARY} />
+            </TouchableOpacity>
+            <TouchableOpacity 
+              style={styles.actionBtn}
+              onPress={() => navigation.navigate('Consultations', { screen: 'ConsultationsMain' })}
+            >
+              <Ionicons name="chatbubble" size={20} color={COLORS.SUCCESS} />
+            </TouchableOpacity>
           </View>
         </View>
-        <View style={styles.appointmentActions}>
-          <TouchableOpacity 
-            style={styles.actionBtn}
-            onPress={() => navigation.navigate('Appointments', { screen: 'AppointmentsMain' })}
-          >
-            <Ionicons name="calendar" size={20} color={COLORS.PRIMARY} />
-          </TouchableOpacity>
-          <TouchableOpacity 
-            style={styles.actionBtn}
-            onPress={() => navigation.navigate('Consultations', { screen: 'ConsultationsMain' })}
-          >
-            <Ionicons name="chatbubble" size={20} color={COLORS.SUCCESS} />
-          </TouchableOpacity>
-        </View>
-      </View>
-    </Card>
-  );
+      </Card>
+    );
+  };
 
   const PendingRequestCard = ({ request }) => (
     <Card style={styles.requestCard}>
@@ -917,6 +974,11 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: COLORS.WHITE,
   },
+  patientAvatarImage: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+  },
   appointmentDetails: {
     flex: 1,
   },
@@ -971,12 +1033,12 @@ const styles = StyleSheet.create({
   },
   requestType: {
     fontSize: FONT_SIZES.SM,
-    color: COLORS.PRIMARY,
+    color: COLORS.TEXT_SECONDARY,
     marginBottom: SPACING.XS / 2,
   },
   requestTime: {
     fontSize: FONT_SIZES.XS,
-    color: COLORS.TEXT_SECONDARY,
+    color: COLORS.GRAY_MEDIUM,
   },
   requestActions: {
     flexDirection: 'row',
@@ -998,17 +1060,17 @@ const styles = StyleSheet.create({
   requestReason: {
     fontSize: FONT_SIZES.SM,
     color: COLORS.TEXT_SECONDARY,
-    fontStyle: 'italic',
+    paddingLeft: 44, // Align with patient info
   },
   emptyState: {
     alignItems: 'center',
-    paddingVertical: SPACING.XL,
+    padding: SPACING.XL,
   },
   emptyTitle: {
-    fontSize: FONT_SIZES.MD,
+    fontSize: FONT_SIZES.LG,
     fontWeight: '600',
     color: COLORS.TEXT_PRIMARY,
-    marginTop: SPACING.SM,
+    marginTop: SPACING.MD,
     marginBottom: SPACING.XS,
   },
   emptySubtitle: {

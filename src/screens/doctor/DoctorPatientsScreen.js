@@ -9,7 +9,8 @@ import {
   RefreshControl,
   Alert,
   TextInput,
-  Modal
+  Modal,
+  Image
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../context/AuthContext';
@@ -29,9 +30,11 @@ import {
 } from '../../constants';
 import Card from '../../components/Card';
 import Button from '../../components/Button';
+import useProfilePicture from '../../hooks/useProfilePicture';
 
 const DoctorPatientsScreen = ({ navigation }) => {
   const { userProfile } = useAuth();
+  const { fetchUserProfilePicture, getCachedProfilePicture } = useProfilePicture();
   const [patients, setPatients] = useState([]);
   const [filteredPatients, setFilteredPatients] = useState([]);
   const [refreshing, setRefreshing] = useState(false);
@@ -303,6 +306,45 @@ const DoctorPatientsScreen = ({ navigation }) => {
   const PatientCard = ({ patient }) => {
     const [upcomingAppointments, setUpcomingAppointments] = useState(0);
     const age = calculateAge(patient.birthDate);
+    
+    const [profilePicture, setProfilePicture] = useState(null);
+    const [loadingProfilePicture, setLoadingProfilePicture] = useState(false);
+
+    // Fetch profile picture when component mounts or when patient.id changes
+    useEffect(() => {
+      const loadProfilePicture = async () => {
+        if (patient.id) {
+          console.log('Loading profile picture for patient:', patient.id);
+          setLoadingProfilePicture(true);
+          try {
+            // First check if we have it cached
+            const cachedPicture = getCachedProfilePicture(patient.id);
+            console.log('Cached picture:', cachedPicture);
+            if (cachedPicture && cachedPicture !== null) {
+              setProfilePicture(cachedPicture);
+            } else {
+              // Fetch from Firestore if not cached
+              const pictureUrl = await fetchUserProfilePicture(patient.id);
+              console.log('Fetched picture URL:', pictureUrl);
+              if (pictureUrl && pictureUrl !== null) {
+                setProfilePicture(pictureUrl);
+              } else {
+                // Explicitly set to null if no picture found
+                setProfilePicture(null);
+              }
+            }
+          } catch (error) {
+            console.error('Error loading profile picture:', error);
+            // Set to null on error to show initials
+            setProfilePicture(null);
+          } finally {
+            setLoadingProfilePicture(false);
+          }
+        }
+      };
+
+      loadProfilePicture();
+    }, [patient.id, getCachedProfilePicture, fetchUserProfilePicture]);
 
     useEffect(() => {
       const fetchUpcomingAppointments = async () => {
@@ -319,7 +361,19 @@ const DoctorPatientsScreen = ({ navigation }) => {
           <View style={styles.patientHeader}>
             <View style={styles.patientInfo}>
               <View style={styles.patientAvatar}>
-                <Text style={styles.patientInitial}>{patient.name.charAt(0)}</Text>
+                {profilePicture && profilePicture !== null ? (
+                  <Image 
+                    source={{ uri: profilePicture }} 
+                    style={styles.patientAvatarImage}
+                    onError={() => {
+                      console.log('Profile picture load error for patient:', patient.id);
+                      // Fallback to initials if image fails to load
+                      setProfilePicture(null);
+                    }}
+                  />
+                ) : (
+                  <Text style={styles.patientInitial}>{patient.name.charAt(0)}</Text>
+                )}
               </View>
               <View style={styles.patientDetails}>
                 <Text style={styles.patientName}>{patient.name}</Text>
@@ -715,6 +769,11 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZES.LG,
     fontWeight: 'bold',
     color: COLORS.WHITE,
+  },
+  patientAvatarImage: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
   },
   patientDetails: {
     flex: 1,

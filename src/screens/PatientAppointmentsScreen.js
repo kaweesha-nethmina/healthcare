@@ -7,7 +7,8 @@ import {
   ScrollView,
   TouchableOpacity,
   RefreshControl,
-  Alert
+  Alert,
+  Image
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
@@ -29,9 +30,11 @@ import {
   CONSULTATION_STATUS
 } from '../constants';
 import Card from '../components/Card';
+import useProfilePicture from '../hooks/useProfilePicture';
 
 const PatientAppointmentsScreen = ({ navigation }) => {
   const { userProfile } = useAuth();
+  const { fetchUserProfilePicture, getCachedProfilePicture } = useProfilePicture();
   const [appointments, setAppointments] = useState([]);
   const [refreshing, setRefreshing] = useState(false);
   const [filterStatus, setFilterStatus] = useState('all'); // all, upcoming, completed, cancelled
@@ -142,74 +145,124 @@ const PatientAppointmentsScreen = ({ navigation }) => {
     return appointment.status === filterStatus;
   });
 
-  const AppointmentCard = ({ appointment }) => (
-    <Card style={styles.appointmentCard}>
-      <View style={styles.appointmentHeader}>
-        <Text style={styles.appointmentTitle}>{appointment.doctorName}</Text>
-        <View style={styles.appointmentStatus}>
-          <View style={[
-            styles.statusBadge, 
-            { backgroundColor: getStatusColor(appointment.status) }
-          ]}>
-            <Text style={styles.statusText}>
-              {getStatusText(appointment.status)}
-            </Text>
+  const AppointmentCard = ({ appointment }) => {
+    const [profilePicture, setProfilePicture] = useState(null);
+    const [loadingProfilePicture, setLoadingProfilePicture] = useState(false);
+
+    // Fetch profile picture when component mounts
+    useEffect(() => {
+      const loadProfilePicture = async () => {
+        if (appointment.doctorId) {
+          setLoadingProfilePicture(true);
+          try {
+            // First check if we have it cached
+            const cachedPicture = getCachedProfilePicture(appointment.doctorId);
+            if (cachedPicture) {
+              setProfilePicture(cachedPicture);
+            } else {
+              // Fetch from Firestore if not cached
+              const pictureUrl = await fetchUserProfilePicture(appointment.doctorId);
+              setProfilePicture(pictureUrl);
+            }
+          } catch (error) {
+            console.error('Error loading profile picture:', error);
+          } finally {
+            setLoadingProfilePicture(false);
+          }
+        }
+      };
+
+      loadProfilePicture();
+    }, [appointment.doctorId]);
+
+    return (
+      <Card style={styles.appointmentCard}>
+        <View style={styles.appointmentHeader}>
+          <View style={styles.doctorInfo}>
+            <View style={styles.doctorAvatar}>
+              {profilePicture ? (
+                <Image 
+                  source={{ uri: profilePicture }} 
+                  style={styles.doctorAvatarImage}
+                  onError={() => {
+                    console.log('Profile picture load error for doctor:', appointment.doctorId);
+                    // Fallback to default icon if image fails to load
+                    setProfilePicture(null);
+                  }}
+                />
+              ) : (
+                <Ionicons name="person" size={20} color={COLORS.WHITE} />
+              )}
+            </View>
+            <View style={styles.doctorDetails}>
+              <Text style={styles.appointmentTitle}>{appointment.doctorName}</Text>
+              <Text style={styles.appointmentSubtitle}>
+                {appointment.specialization}
+              </Text>
+            </View>
+          </View>
+          <View style={styles.appointmentStatus}>
+            <View style={[
+              styles.statusBadge, 
+              { backgroundColor: getStatusColor(appointment.status) }
+            ]}>
+              <Text style={styles.statusText}>
+                {getStatusText(appointment.status)}
+              </Text>
+            </View>
           </View>
         </View>
-      </View>
-      <Text style={styles.appointmentSubtitle}>
-        {appointment.specialization}
-      </Text>
-      <Text style={styles.appointmentDate}>
-        {appointment.appointmentDate} at {appointment.appointmentTime}
-      </Text>
-      <View style={styles.appointmentActions}>
-        {appointment.status === CONSULTATION_STATUS.ONGOING && (
-          <TouchableOpacity
-            style={styles.joinButton}
-            onPress={() => {
-              if (appointment.type === 'video') {
-                navigation.navigate('Consultation', {
-                  screen: 'VideoCall',
-                  params: {
-                    consultationId: appointment.id,
-                    doctorId: appointment.doctorId,
-                    doctorName: appointment.doctorName
-                  }
-                });
-              } else if (appointment.type === 'chat') {
-                navigation.navigate('Consultation', {
-                  screen: 'Chat',
-                  params: {
-                    appointmentId: appointment.id,
-                    doctorId: appointment.doctorId,
-                    doctorName: appointment.doctorName,
-                    patientId: userProfile.uid,
-                    patientName: `${userProfile.firstName || ''} ${userProfile.lastName || ''}`.trim() || 'Patient'
-                  }
-                });
-              }
-            }}
-          >
-            <Text style={styles.joinButtonText}>Join Now</Text>
-          </TouchableOpacity>
-        )}
-        <TouchableOpacity
-          style={styles.detailsButton}
-          onPress={() => Alert.alert(
-            'Appointment Details',
-            `Doctor: ${appointment.doctorName}\n` +
-            `Date: ${appointment.appointmentDate}\n` +
-            `Time: ${appointment.appointmentTime}\n` +
-            `Status: ${getStatusText(appointment.status)}\n` +
-            `Type: ${appointment.type?.charAt(0).toUpperCase() + appointment.type?.slice(1) || 'In-person'}`
+        <Text style={styles.appointmentDate}>
+          {appointment.appointmentDate} at {appointment.appointmentTime}
+        </Text>
+        <View style={styles.appointmentActions}>
+          {appointment.status === CONSULTATION_STATUS.ONGOING && (
+            <TouchableOpacity
+              style={styles.joinButton}
+              onPress={() => {
+                if (appointment.type === 'video') {
+                  navigation.navigate('Consultation', {
+                    screen: 'VideoCall',
+                    params: {
+                      consultationId: appointment.id,
+                      doctorId: appointment.doctorId,
+                      doctorName: appointment.doctorName
+                    }
+                  });
+                } else if (appointment.type === 'chat') {
+                  navigation.navigate('Consultation', {
+                    screen: 'Chat',
+                    params: {
+                      appointmentId: appointment.id,
+                      doctorId: appointment.doctorId,
+                      doctorName: appointment.doctorName,
+                      patientId: userProfile.uid,
+                      patientName: `${userProfile.firstName || ''} ${userProfile.lastName || ''}`.trim() || 'Patient'
+                    }
+                  });
+                }
+              }}
+            >
+              <Text style={styles.joinButtonText}>Join Now</Text>
+            </TouchableOpacity>
           )}
-        >
-          <Text style={styles.detailsButtonText}>View Details</Text>
-        </TouchableOpacity>
-      </View>
-    </Card>
-  );
+          <TouchableOpacity
+            style={styles.detailsButton}
+            onPress={() => Alert.alert(
+              'Appointment Details',
+              `Doctor: ${appointment.doctorName}\n` +
+              `Date: ${appointment.appointmentDate}\n` +
+              `Time: ${appointment.appointmentTime}\n` +
+              `Status: ${getStatusText(appointment.status)}\n` +
+              `Type: ${appointment.type?.charAt(0).toUpperCase() + appointment.type?.slice(1) || 'In-person'}`
+            )}
+          >
+            <Text style={styles.detailsButtonText}>View Details</Text>
+          </TouchableOpacity>
+        </View>
+      </Card>
+    );
+  };
 
   const FilterButton = ({ title, value, active, onPress }) => (
     <TouchableOpacity

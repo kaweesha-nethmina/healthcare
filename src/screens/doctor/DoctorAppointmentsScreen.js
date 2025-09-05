@@ -8,7 +8,8 @@ import {
   TouchableOpacity,
   RefreshControl,
   Alert,
-  Modal
+  Modal,
+  Image
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../context/AuthContext';
@@ -33,9 +34,11 @@ import {
 import Card from '../../components/Card';
 import Button from '../../components/Button';
 import NotificationService from '../../services/notificationService';
+import useProfilePicture from '../../hooks/useProfilePicture';
 
 const DoctorAppointmentsScreen = ({ navigation }) => {
   const { userProfile } = useAuth();
+  const { fetchUserProfilePicture, getCachedProfilePicture } = useProfilePicture();
   const [appointments, setAppointments] = useState([]);
   const [refreshing, setRefreshing] = useState(false);
   const [selectedDate, setSelectedDate] = useState(new Date());
@@ -279,15 +282,66 @@ const DoctorAppointmentsScreen = ({ navigation }) => {
     const canReschedule = [CONSULTATION_STATUS.CONFIRMED].includes(appointment.status);
     const canCancel = [CONSULTATION_STATUS.CONFIRMED, CONSULTATION_STATUS.PENDING, 'rescheduled'].includes(appointment.status);
     const canComplete = appointment.status === CONSULTATION_STATUS.ONGOING;
+    
+    const [profilePicture, setProfilePicture] = useState(null);
+    const [loadingProfilePicture, setLoadingProfilePicture] = useState(false);
+
+    // Fetch profile picture when component mounts or when appointment.patientId changes
+    useEffect(() => {
+      const loadProfilePicture = async () => {
+        if (appointment.patientId) {
+          console.log('Loading profile picture for patient:', appointment.patientId);
+          setLoadingProfilePicture(true);
+          try {
+            // First check if we have it cached
+            const cachedPicture = getCachedProfilePicture(appointment.patientId);
+            console.log('Cached picture:', cachedPicture);
+            if (cachedPicture && cachedPicture !== null) {
+              setProfilePicture(cachedPicture);
+            } else {
+              // Fetch from Firestore if not cached
+              const pictureUrl = await fetchUserProfilePicture(appointment.patientId);
+              console.log('Fetched picture URL:', pictureUrl);
+              if (pictureUrl && pictureUrl !== null) {
+                setProfilePicture(pictureUrl);
+              } else {
+                // Explicitly set to null if no picture found
+                setProfilePicture(null);
+              }
+            }
+          } catch (error) {
+            console.error('Error loading profile picture:', error);
+            // Set to null on error to show initials
+            setProfilePicture(null);
+          } finally {
+            setLoadingProfilePicture(false);
+          }
+        }
+      };
+
+      loadProfilePicture();
+    }, [appointment.patientId, getCachedProfilePicture, fetchUserProfilePicture]);
 
     return (
       <Card style={styles.appointmentCard}>
         <View style={styles.appointmentHeader}>
           <View style={styles.patientInfo}>
             <View style={styles.patientAvatar}>
-              <Text style={styles.patientInitial}>
-                {appointment.patientName ? appointment.patientName.charAt(0) : 'U'}
-              </Text>
+              {profilePicture && profilePicture !== null ? (
+                <Image 
+                  source={{ uri: profilePicture }} 
+                  style={styles.patientAvatarImage}
+                  onError={() => {
+                    console.log('Profile picture load error for patient:', appointment.patientId);
+                    // Fallback to initials if image fails to load
+                    setProfilePicture(null);
+                  }}
+                />
+              ) : (
+                <Text style={styles.patientInitial}>
+                  {appointment.patientName ? appointment.patientName.charAt(0) : 'U'}
+                </Text>
+              )}
             </View>
             <View style={styles.appointmentDetails}>
               <Text style={styles.patientName}>{appointment.patientName || 'Unknown Patient'}</Text>
@@ -650,6 +704,11 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZES.MD,
     fontWeight: 'bold',
     color: COLORS.WHITE,
+  },
+  patientAvatarImage: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
   },
   appointmentDetails: {
     flex: 1,

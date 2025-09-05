@@ -35,15 +35,16 @@ import {
   BORDER_RADIUS
 } from '../constants';
 import NotificationService from '../services/notificationService';
+import useProfilePicture from '../hooks/useProfilePicture';
 
 const ChatScreen = ({ navigation, route }) => {
   const { appointmentId, doctorId, doctorName, patientId, patientName, chatId: routeChatId } = route.params || {};
   const { user, userProfile } = useAuth();
+  const { fetchUserProfilePicture, getCachedProfilePicture, profilePictures, clearCache } = useProfilePicture();
   const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const [chatPartnerName, setChatPartnerName] = useState('');
-  const [profilePictures, setProfilePictures] = useState({}); // Store profile pictures for users
   const flatListRef = useRef(null);
   const unsubscribeRef = useRef(null);
 
@@ -68,7 +69,7 @@ const ChatScreen = ({ navigation, route }) => {
       // User is not authenticated, clear any existing data
       setMessages([]);
       setChatPartnerName('');
-      setProfilePictures({});
+      clearCache();
     }
     
     return () => {
@@ -147,40 +148,10 @@ const ChatScreen = ({ navigation, route }) => {
     }
   };
 
-  // Fetch profile picture for a user from Supabase
-  const fetchUserProfilePicture = async (userId) => {
-    try {
-      // Check if we already have the profile picture URL cached
-      if (profilePictures[userId]) {
-        return profilePictures[userId];
-      }
-
-      // Fetch user data from Firestore to get profile picture URL
-      const userDocRef = doc(db, 'users', userId);
-      const userDoc = await getDoc(userDocRef);
-      
-      if (userDoc.exists()) {
-        const userData = userDoc.data();
-        const profilePictureURL = userData.profilePictureURL;
-        
-        // Update profile pictures state
-        setProfilePictures(prev => ({
-          ...prev,
-          [userId]: profilePictureURL
-        }));
-        
-        return profilePictureURL;
-      }
-    } catch (error) {
-      console.error('Error fetching user profile picture:', error);
-    }
-    return null;
-  };
-
   // Load profile pictures for chat participants
   const loadChatParticipantsProfilePictures = async () => {
     try {
-      // Fetch profile pictures for both doctor and patient
+      // Fetch profile pictures for both doctor and patient using the hook
       await fetchUserProfilePicture(doctorId);
       await fetchUserProfilePicture(patientId);
     } catch (error) {
