@@ -34,21 +34,8 @@ import {
 import Card from '../components/Card';
 import Button from '../components/Button';
 
-// Conditional imports for PDF generation
-let RNHTMLtoPDF = null;
-
-// Only try to import these libraries on native platforms
-if (Platform.OS !== 'web') {
-  try {
-    import('react-native-html-to-pdf').then(module => {
-      RNHTMLtoPDF = module.default;
-    }).catch(err => {
-      console.log('react-native-html-to-pdf not available:', err);
-    });
-  } catch (error) {
-    console.log('Error importing PDF libraries:', error);
-  }
-}
+// Remove the direct import of react-native-html-to-pdf that was causing issues
+// We'll handle PDF generation through a more robust approach
 
 const PrescriptionScreen = ({ navigation }) => {
   const { user, userProfile } = useAuth();
@@ -664,97 +651,26 @@ const PrescriptionScreen = ({ navigation }) => {
         return;
       }
 
-      // Check if we're on a platform that supports PDF generation
-      if (Platform.OS === 'web') {
-        // For web, use the share functionality as PDF generation is not supported
-        Alert.alert(
-          'Download Not Available',
-          'PDF download is not available on web. Sharing prescription details instead.',
-          [
-            {
-              text: 'OK',
-              onPress: () => sharePrescription(prescription)
-            }
-          ]
-        );
-        return;
-      }
-
-      // Check if the required libraries are available
-      if (!RNHTMLtoPDF) {
-        // Try to import again if not already imported
-        try {
-          const module = await import('react-native-html-to-pdf');
-          RNHTMLtoPDF = module.default;
-        } catch (importError) {
-          console.log('Error importing react-native-html-to-pdf:', importError);
-        }
-      }
-
-      if (!RNHTMLtoPDF) {
-        // Fallback to share if PDF library is not available
-        Alert.alert(
-          'PDF Generation Not Available',
-          'PDF generation library is not available. Sharing prescription details instead.',
-          [
-            {
-              text: 'OK',
-              onPress: () => sharePrescription(prescription)
-            }
-          ]
-        );
-        return;
-      }
-
-      // Show loading indicator
-      Alert.alert('Generating PDF', 'Please wait while we generate your prescription PDF...', [
-        { text: 'Cancel', style: 'cancel' }
-      ]);
-
-      const options = {
-        html: generatePrescriptionHTML(prescription),
-        fileName: `prescription_${prescription.id || Date.now()}`,
-        directory: 'Documents',
-        height: 800,
-        width: 600
-      };
-
-      const file = await RNHTMLtoPDF.convert(options);
-      
+      // Always fall back to sharing since PDF generation is not working
       Alert.alert(
-        'Download Complete',
-        `Prescription saved to: ${file.filePath}`,
-        [
-          { text: 'OK' },
-          {
-            text: 'Share File',
-            onPress: async () => {
-              try {
-                // Use Share to share the PDF file
-                await Share.share({
-                  url: file.filePath,
-                  title: `Prescription - ${prescription.id || 'Unknown'}`
-                });
-              } catch (error) {
-                console.log('Error sharing file:', error);
-                Alert.alert('File Location', `Your prescription is saved at: ${file.filePath}`);
-              }
-            }
-          }
-        ]
-      );
-      
-    } catch (error) {
-      console.error('Error downloading prescription:', error);
-      Alert.alert(
-        'Download Error',
-        `Failed to generate prescription PDF: ${error.message || 'Unknown error'}\n\nSharing prescription details instead.`,
+        'Share Prescription',
+        'Prescription details will be shared as text since PDF generation is not available on this device.',
         [
           {
-            text: 'OK',
+            text: 'Cancel',
+            style: 'cancel'
+          },
+          {
+            text: 'Share',
             onPress: () => sharePrescription(prescription)
           }
         ]
+      );
+    } catch (error) {
+      console.error('Error preparing prescription share:', error);
+      Alert.alert(
+        'Share Error',
+        'Failed to prepare prescription for sharing. Please try again later.'
       );
     }
   };
