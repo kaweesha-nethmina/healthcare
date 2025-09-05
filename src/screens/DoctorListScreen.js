@@ -320,7 +320,7 @@ const DoctorListScreen = ({ navigation, route }) => {
       handleBookAppointment(doctor);
     } else {
       // Normal profile view
-      navigation.navigate('DoctorProfile', { doctorId: doctor.id });
+      navigation.navigate('DoctorProfile', { doctor: { id: doctor.id } });
     }
   };
 
