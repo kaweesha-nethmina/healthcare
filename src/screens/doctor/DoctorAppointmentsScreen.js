@@ -244,8 +244,17 @@ const DoctorAppointmentsScreen = ({ navigation }) => {
   const getTodaysAppointments = () => {
     const today = new Date().toDateString();
     return appointments.filter(apt => {
-      const aptDate = new Date(apt.appointmentDate).toDateString();
-      return aptDate === today;
+      // Handle potential invalid date values
+      if (!apt || !apt.appointmentDate) {
+        return false;
+      }
+      
+      try {
+        const aptDate = new Date(apt.appointmentDate).toDateString();
+        return aptDate === today;
+      } catch (error) {
+        return false;
+      }
     });
   };
 
@@ -277,18 +286,18 @@ const DoctorAppointmentsScreen = ({ navigation }) => {
           <View style={styles.patientInfo}>
             <View style={styles.patientAvatar}>
               <Text style={styles.patientInitial}>
-                {appointment.patientName.charAt(0)}
+                {appointment.patientName ? appointment.patientName.charAt(0) : 'U'}
               </Text>
             </View>
             <View style={styles.appointmentDetails}>
-              <Text style={styles.patientName}>{appointment.patientName}</Text>
+              <Text style={styles.patientName}>{appointment.patientName || 'Unknown Patient'}</Text>
               <Text style={styles.appointmentTime}>
-                {formatDateTime(`${appointment.appointmentDate}T${appointment.appointmentTime}`)} • {appointment.duration || 30} min
+                {formatAppointmentDateTime(appointment.appointmentDate, appointment.appointmentTime) || 'Date/Time not set'} • {appointment.duration || 30} min
               </Text>
               <Text style={styles.appointmentType}>
                 {appointment.type === 'video' ? 'Video Consultation' : 
                  appointment.type === 'chat' ? 'Chat Consultation' : 
-                 appointment.type === 'in-person' ? 'In-Person' : appointment.type}
+                 appointment.type === 'in-person' ? 'In-Person' : (appointment.type || 'Consultation')}
               </Text>
             </View>
           </View>
@@ -300,13 +309,13 @@ const DoctorAppointmentsScreen = ({ navigation }) => {
                 color={COLORS.WHITE} 
               />
               <Text style={styles.statusText}>
-                {appointment.status.replace('_', ' ').charAt(0).toUpperCase() + appointment.status.replace('_', ' ').slice(1)}
+                {appointment.status ? appointment.status.replace('_', ' ').charAt(0).toUpperCase() + appointment.status.replace('_', ' ').slice(1) : 'Unknown'}
               </Text>
             </View>
           </View>
         </View>
 
-        <Text style={styles.appointmentReason}>{appointment.symptoms}</Text>
+        <Text style={styles.appointmentReason}>{appointment.symptoms || 'No symptoms provided'}</Text>
 
         <View style={styles.appointmentActions}>
           {canConfirm && (
@@ -369,22 +378,64 @@ const DoctorAppointmentsScreen = ({ navigation }) => {
     );
   };
 
-  const formatDateTime = (dateString) => {
-    const date = new Date(dateString);
-    return date.toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: true
-    });
+
+
+  const formatAppointmentDateTime = (appointmentDate, appointmentTime) => {
+    // Handle potential invalid date or time values
+    if (!appointmentDate || !appointmentTime) {
+      return 'Date/Time not set';
+    }
+    
+    // Try to create a proper date string
+    try {
+      const dateTimeString = `${appointmentDate}T${appointmentTime}`;
+      const date = new Date(dateTimeString);
+      
+      // Check if the date is valid
+      if (isNaN(date.getTime())) {
+        // Fallback to just showing the date and time separately
+        return `${appointmentDate || 'Unknown Date'} at ${appointmentTime || 'Unknown Time'}`;
+      }
+      
+      // Format the date properly
+      const formattedDate = date.toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric'
+      });
+      
+      // Format the time properly
+      const formattedTime = date.toLocaleTimeString('en-US', {
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true
+      });
+      
+      return `${formattedDate} at ${formattedTime}`;
+    } catch (error) {
+      // Fallback to just showing the date and time separately
+      return `${appointmentDate || 'Unknown Date'} at ${appointmentTime || 'Unknown Time'}`;
+    }
   };
 
   const isAppointmentTime = (appointment) => {
     const now = new Date();
-    const appointmentTime = new Date(`${appointment.appointmentDate}T${appointment.appointmentTime}`);
-    const timeDiff = appointmentTime.getTime() - now.getTime();
-    return timeDiff <= 15 * 60 * 1000 && timeDiff >= -15 * 60 * 1000; // Within 15 minutes
+    // Handle potential invalid date or time values
+    if (!appointment || !appointment.appointmentDate || !appointment.appointmentTime) {
+      return false;
+    }
+    
+    try {
+      const appointmentTime = new Date(`${appointment.appointmentDate}T${appointment.appointmentTime}`);
+      // Check if the date is valid
+      if (isNaN(appointmentTime.getTime())) {
+        return false;
+      }
+      
+      const timeDiff = appointmentTime.getTime() - now.getTime();
+      return timeDiff <= 15 * 60 * 1000 && timeDiff >= -15 * 60 * 1000; // Within 15 minutes
+    } catch (error) {
+      return false;
+    }
   };
 
   const todaysAppointments = getTodaysAppointments();

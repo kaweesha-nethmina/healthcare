@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
 import * as Notifications from 'expo-notifications';
 import { useAuth } from '../context/AuthContext';
 import { USER_ROLES } from '../constants';
+import videoCallNotificationService from '../services/videoCallNotificationService';
 
 // Navigation Components
 import AppTabNavigator from './AppTabNavigator';
@@ -21,6 +22,23 @@ const AppNavigator = () => {
   const { user, userProfile, loading, error } = useAuth();
   const [retryCount, setRetryCount] = useState(0);
   const [notificationListener, setNotificationListener] = useState(null);
+  const navigationRef = useRef();
+
+  // Initialize video call notifications
+  useEffect(() => {
+    if (userProfile && navigationRef.current) {
+      const userRole = userProfile.role || USER_ROLES.PATIENT;
+      videoCallNotificationService.initializeForUser(
+        userProfile.uid,
+        userRole,
+        navigationRef.current
+      );
+    }
+
+    return () => {
+      videoCallNotificationService.cleanup();
+    };
+  }, [userProfile]);
 
   const handleRetry = () => {
     setRetryCount(prev => prev + 1);
@@ -86,7 +104,7 @@ const AppNavigator = () => {
   };
 
   return (
-    <NavigationContainer>
+    <NavigationContainer ref={navigationRef}>
       <Stack.Navigator screenOptions={{ headerShown: false }}>
         {user ? (
           <Stack.Screen name="Main" component={getMainNavigator()} />

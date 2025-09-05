@@ -181,8 +181,12 @@ const DoctorConsultationScreen = ({ navigation }) => {
         if (consultation.type === 'video') {
           navigation.navigate('VideoCall', {
             consultationId: consultation.id,
+            appointmentId: consultation.id,
             patientId: consultation.patientId,
-            patientName: consultation.patientName
+            patientName: consultation.patientName,
+            doctorId: consultation.doctorId,
+            doctorName: consultation.doctorName,
+            isInitiator: consultation.status === CONSULTATION_STATUS.CONFIRMED // Doctor initiates if confirmed status
           });
         } else if (consultation.type === 'chat') {
           navigation.navigate('Chat', {
@@ -227,19 +231,45 @@ const DoctorConsultationScreen = ({ navigation }) => {
         setShowConsultationModal(true);
         break;
       case 'start':
-        Alert.alert(
-          'Start Consultation',
-          `Start consultation with ${consultation.patientName}?`,
-          [
-            { text: 'Cancel', style: 'cancel' },
-            {
-              text: 'Start',
-              onPress: async () => {
-                await updateConsultationStatus(consultation.id, CONSULTATION_STATUS.ONGOING);
+        if (consultation.type === 'video') {
+          Alert.alert(
+            'Start Video Consultation',
+            `Start video consultation with ${consultation.patientName}?`,
+            [
+              { text: 'Cancel', style: 'cancel' },
+              {
+                text: 'Start Call',
+                onPress: async () => {
+                  await updateConsultationStatus(consultation.id, CONSULTATION_STATUS.ONGOING);
+                  // Navigate to video call as initiator
+                  navigation.navigate('VideoCall', {
+                    consultationId: consultation.id,
+                    appointmentId: consultation.id,
+                    patientId: consultation.patientId,
+                    patientName: consultation.patientName,
+                    doctorId: consultation.doctorId,
+                    doctorName: consultation.doctorName,
+                    isInitiator: true // Doctor initiates the call
+                  });
+                }
               }
-            }
-          ]
-        );
+            ]
+          );
+        } else {
+          Alert.alert(
+            'Start Consultation',
+            `Start consultation with ${consultation.patientName}?`,
+            [
+              { text: 'Cancel', style: 'cancel' },
+              {
+                text: 'Start',
+                onPress: async () => {
+                  await updateConsultationStatus(consultation.id, CONSULTATION_STATUS.ONGOING);
+                }
+              }
+            ]
+          );
+        }
         break;
       default:
         break;
@@ -581,7 +611,7 @@ const DoctorConsultationScreen = ({ navigation }) => {
       <ScrollView
         style={styles.consultationsList}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-        showsVerticalScrollIndicator={False}
+        showsVerticalScrollIndicator={false}
       >
         {filteredConsultations.length === 0 ? (
           <Card style={styles.emptyState}>

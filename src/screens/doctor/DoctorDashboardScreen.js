@@ -16,7 +16,10 @@ import {
   query,
   where,
   getDocs,
-  onSnapshot
+  onSnapshot,
+  doc,
+  updateDoc,
+  serverTimestamp
 } from 'firebase/firestore';
 import { db } from '../../services/firebase';
 import { NotificationService } from '../../services/notificationService';
@@ -78,7 +81,9 @@ const DoctorDashboardScreen = ({ navigation }) => {
             time: data.time || 'N/A',
             type: data.type || 'Consultation',
             reason: data.reason || 'No reason provided',
-            timeAgo: data.timeAgo || 'Unknown time'
+            timeAgo: data.timeAgo || 'Unknown time',
+            appointmentDate: data.appointmentDate || null,
+            appointmentTime: data.appointmentTime || null
           });
         });
         
@@ -99,12 +104,14 @@ const DoctorDashboardScreen = ({ navigation }) => {
           patientName: apt.patientName || 'Unknown Patient',
           time: apt.time || 'N/A',
           type: apt.type || 'Consultation',
-          reason: apt.reason || 'No reason provided'
+          reason: apt.reason || 'No reason provided',
+          appointmentDate: apt.appointmentDate || null,
+          appointmentTime: apt.appointmentTime || null
         }));
         
-        // Get pending requests (confirmed appointments)
+        // Get pending requests (pending appointments that need doctor confirmation)
         const pendingRequests = appointmentsData.filter(apt => 
-          apt.status === CONSULTATION_STATUS.CONFIRMED
+          apt.status === CONSULTATION_STATUS.PENDING
         ).map(apt => ({
           ...apt,
           patientName: apt.patientName || 'Unknown Patient',
@@ -206,7 +213,9 @@ const DoctorDashboardScreen = ({ navigation }) => {
           time: data.time || 'N/A',
           type: data.type || 'Consultation',
           reason: data.reason || 'No reason provided',
-          timeAgo: data.timeAgo || 'Unknown time'
+          timeAgo: data.timeAgo || 'Unknown time',
+          appointmentDate: data.appointmentDate || null,
+          appointmentTime: data.appointmentTime || null
         });
       });
       
@@ -227,12 +236,14 @@ const DoctorDashboardScreen = ({ navigation }) => {
         patientName: apt.patientName || 'Unknown Patient',
         time: apt.time || 'N/A',
         type: apt.type || 'Consultation',
-        reason: apt.reason || 'No reason provided'
+        reason: apt.reason || 'No reason provided',
+        appointmentDate: apt.appointmentDate || null,
+        appointmentTime: apt.appointmentTime || null
       }));
       
-      // Get pending requests (confirmed appointments)
+      // Get pending requests (pending appointments that need doctor confirmation)
       const pendingRequests = appointmentsData.filter(apt => 
-        apt.status === CONSULTATION_STATUS.CONFIRMED
+        apt.status === CONSULTATION_STATUS.PENDING
       ).map(apt => ({
         ...apt,
         patientName: apt.patientName || 'Unknown Patient',
@@ -340,6 +351,43 @@ const DoctorDashboardScreen = ({ navigation }) => {
     </Card>
   );
 
+  const formatAppointmentDateTime = (appointmentDate, appointmentTime) => {
+    // Handle potential invalid date or time values
+    if (!appointmentDate || !appointmentTime) {
+      return 'Date/Time not set';
+    }
+    
+    // Try to create a proper date string
+    try {
+      const dateTimeString = `${appointmentDate}T${appointmentTime}`;
+      const date = new Date(dateTimeString);
+      
+      // Check if the date is valid
+      if (isNaN(date.getTime())) {
+        // Fallback to just showing the date and time separately
+        return `${appointmentDate || 'Unknown Date'} at ${appointmentTime || 'Unknown Time'}`;
+      }
+      
+      // Format the date properly
+      const formattedDate = date.toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric'
+      });
+      
+      // Format the time properly
+      const formattedTime = date.toLocaleTimeString('en-US', {
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true
+      });
+      
+      return `${formattedDate} at ${formattedTime}`;
+    } catch (error) {
+      // Fallback to just showing the date and time separately
+      return `${appointmentDate || 'Unknown Date'} at ${appointmentTime || 'Unknown Time'}`;
+    }
+  };
+
   const AppointmentCard = ({ appointment }) => (
     <Card style={styles.appointmentCard}>
       <View style={styles.appointmentHeader}>
@@ -352,9 +400,9 @@ const DoctorDashboardScreen = ({ navigation }) => {
           <View style={styles.appointmentDetails}>
             <Text style={styles.patientName}>{appointment.patientName || 'Unknown Patient'}</Text>
             <Text style={styles.appointmentTime}>
-              {appointment.time || 'N/A'} • {appointment.type || 'Consultation'}
+              {formatAppointmentDateTime(appointment.appointmentDate, appointment.appointmentTime) || 'N/A'} • {appointment.type || 'Consultation'}
             </Text>
-            <Text style={styles.appointmentReason}>{appointment.reason || 'No reason provided'}</Text>
+            <Text style={styles.appointmentReason}>{appointment.symptoms || appointment.reason || 'No symptoms provided'}</Text>
           </View>
         </View>
         <View style={styles.appointmentActions}>
@@ -396,13 +444,44 @@ const DoctorDashboardScreen = ({ navigation }) => {
         <View style={styles.requestActions}>
           <TouchableOpacity 
             style={[styles.requestBtn, styles.acceptBtn]}
-            onPress={() => Alert.alert('Request Accepted', `Accepted ${request.type || 'consultation'} request from ${request.patientName || 'unknown patient'}`)}
+            onPress={() => {
+              Alert.alert(
+                'Confirm Appointment',
+                `Are you sure you want to confirm the appointment with ${request.patientName || 'this patient'}?`,
+                [
+                  { text: 'Cancel', style: 'cancel' },
+                  {
+                    text: 'Confirm',
+                    onPress: async () => {
+                      await updateAppointmentStatus(request.id, CONSULTATION_STATUS.CONFIRMED);
+                      Alert.alert('Success', 'Appointment confirmed successfully');
+                    }
+                  }
+                ]
+              );
+            }}
           >
             <Ionicons name="checkmark" size={16} color={COLORS.WHITE} />
           </TouchableOpacity>
           <TouchableOpacity 
             style={[styles.requestBtn, styles.declineBtn]}
-            onPress={() => Alert.alert('Request Declined', `Declined ${request.type || 'consultation'} request from ${request.patientName || 'unknown patient'}`)}
+            onPress={() => {
+              Alert.alert(
+                'Decline Appointment',
+                `Are you sure you want to decline the appointment with ${request.patientName || 'this patient'}?`,
+                [
+                  { text: 'Cancel', style: 'cancel' },
+                  {
+                    text: 'Decline',
+                    style: 'destructive',
+                    onPress: async () => {
+                      await updateAppointmentStatus(request.id, CONSULTATION_STATUS.CANCELLED);
+                      Alert.alert('Success', 'Appointment declined successfully');
+                    }
+                  }
+                ]
+              );
+            }}
           >
             <Ionicons name="close" size={16} color={COLORS.WHITE} />
           </TouchableOpacity>
@@ -411,6 +490,35 @@ const DoctorDashboardScreen = ({ navigation }) => {
       <Text style={styles.requestReason}>{request.reason || 'No reason provided'}</Text>
     </Card>
   );
+
+  const updateAppointmentStatus = async (appointmentId, newStatus) => {
+    try {
+      const appointmentRef = doc(db, 'appointments', appointmentId);
+      await updateDoc(appointmentRef, {
+        status: newStatus,
+        updatedAt: serverTimestamp()
+      });
+      
+      // Get the appointment data to create notification
+      const appointment = dashboardData.pendingRequests.find(a => a.id === appointmentId) || 
+                         dashboardData.todayAppointments.find(a => a.id === appointmentId);
+      
+      if (appointment) {
+        await NotificationService.createAppointmentNotification(
+          appointment.patientId,
+          appointment,
+          newStatus
+        );
+      }
+      
+      console.log(`Appointment ${appointmentId} status updated to ${newStatus}`);
+      // Refresh the data to reflect the changes
+      await loadDashboardData();
+    } catch (error) {
+      console.error('Error updating appointment status:', error);
+      Alert.alert('Error', 'Failed to update appointment status');
+    }
+  };
 
   return (
     <SafeAreaView style={styles.container}>

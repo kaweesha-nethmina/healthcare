@@ -6,10 +6,13 @@ import {
   SafeAreaView,
   TouchableOpacity,
   Alert,
-  Dimensions
+  Dimensions,
+  Platform
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+// Conditional import for RTCView
 import { useAuth } from '../context/AuthContext';
+import webRTCService from '../services/webrtcService';
 import {
   COLORS,
   FONT_SIZES,
@@ -17,34 +20,134 @@ import {
   BORDER_RADIUS
 } from '../constants';
 
+// Conditional import for RTCView to avoid issues in Expo Go
+let RTCView;
+try {
+  if (Platform.OS !== 'web') {
+    const webrtc = require('react-native-webrtc');
+    RTCView = webrtc.RTCView;
+  }
+} catch (error) {
+  console.log('RTCView not available in this environment');
+  RTCView = null;
+}
+
 const { width, height } = Dimensions.get('window');
 
 const VideoCallScreen = ({ navigation, route }) => {
   const { userProfile } = useAuth();
-  const { appointmentId, patientId, patientName, doctorId, doctorName } = route.params || {};
+  const { 
+    appointmentId, 
+    consultationId,
+    patientId, 
+    patientName, 
+    doctorId, 
+    doctorName,
+    isInitiator = false 
+  } = route.params || {};
   
-  const [callState, setCallState] = useState('connecting'); // connecting, connected, ended
+  // Check if WebRTC is available
+  const isWebRTCAvailable = !!RTCView && !webRTCService.isMockMode;
+  
+  const [callState, setCallState] = useState(isWebRTCAvailable ? 'initializing' : 'failed'); // initializing, calling, connecting, connected, ended, failed
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoOn, setIsVideoOn] = useState(true);
   const [isFrontCamera, setIsFrontCamera] = useState(true);
   const [callDuration, setCallDuration] = useState(0);
   const [connectionQuality, setConnectionQuality] = useState('good'); // good, fair, poor
+  const [localStream, setLocalStream] = useState(null);
+  const [remoteStream, setRemoteStream] = useState(null);
+  const [error, setError] = useState(isWebRTCAvailable ? null : 'Video calling is not available in Expo Go. Please use a development build.');
   
   const callTimer = useRef(null);
+  const callId = consultationId || appointmentId || `call_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
   useEffect(() => {
-    // Simulate connection process
-    setTimeout(() => {
-      setCallState('connected');
-      startCallTimer();
-    }, 3000);
-
+    // Show alert if WebRTC is not available
+    if (!isWebRTCAvailable) {
+      Alert.alert(
+        'Video Call Not Available',
+        'Video calling requires a development build. Please run:\n\nnpx expo run:ios\nor\nnpx expo run:android',
+        [
+          {
+            text: 'Go Back',
+            onPress: () => navigation.goBack(),
+            style: 'default'
+          }
+        ]
+      );
+    } else {
+      initializeCall();
+    }
+    
     return () => {
-      if (callTimer.current) {
-        clearInterval(callTimer.current);
-      }
+      cleanup();
     };
   }, []);
+
+  const initializeCall = async () => {
+    try {
+      // Check if WebRTC is available before initializing
+      if (!isWebRTCAvailable) {
+        setCallState('failed');
+        setError('Video calling is not available in this environment. Please use a development build.');
+        return;
+      }
+      
+      setCallState('calling');
+      
+      if (isInitiator) {
+        // Start new call
+        await webRTCService.startCall(callId, true);
+      } else {
+        // Join existing call
+        await webRTCService.joinCall(callId);
+      }
+      
+      // Get streams
+      const localStr = webRTCService.getLocalStream();
+      setLocalStream(localStr);
+      
+      // Set up remote stream listener
+      const checkRemoteStream = setInterval(() => {
+        const remoteStr = webRTCService.getRemoteStream();
+        if (remoteStr) {
+          setRemoteStream(remoteStr);
+          setCallState('connected');
+          startCallTimer();
+          clearInterval(checkRemoteStream);
+        }
+      }, 1000);
+      
+      // Set connection timeout
+      setTimeout(() => {
+        if (callState !== 'connected') {
+          clearInterval(checkRemoteStream);
+          setCallState('failed');
+          setError('Connection timeout');
+        }
+      }, 30000); // 30 seconds timeout
+      
+      setCallState('connecting');
+    } catch (error) {
+      console.error('Error initializing call:', error);
+      setCallState('failed');
+      setError(error.message || 'Failed to initialize call');
+    }
+  };
+
+  const cleanup = async () => {
+    if (callTimer.current) {
+      clearInterval(callTimer.current);
+    }
+    
+    try {
+      await webRTCService.endCall();
+      webRTCService.cleanup();
+    } catch (error) {
+      console.error('Error during cleanup:', error);
+    }
+  };
 
   const startCallTimer = () => {
     callTimer.current = setInterval(() => {
@@ -58,7 +161,7 @@ const VideoCallScreen = ({ navigation, route }) => {
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
-  const handleEndCall = () => {
+  const handleEndCall = async () => {
     Alert.alert(
       'End Call',
       'Are you sure you want to end the video call?',
@@ -67,11 +170,9 @@ const VideoCallScreen = ({ navigation, route }) => {
         {
           text: 'End Call',
           style: 'destructive',
-          onPress: () => {
+          onPress: async () => {
             setCallState('ended');
-            if (callTimer.current) {
-              clearInterval(callTimer.current);
-            }
+            await cleanup();
             // Navigate back after a brief delay
             setTimeout(() => {
               navigation.goBack();
@@ -82,19 +183,31 @@ const VideoCallScreen = ({ navigation, route }) => {
     );
   };
 
-  const toggleMute = () => {
-    setIsMuted(!isMuted);
-    // In a real app, this would mute/unmute the microphone
+  const toggleMute = async () => {
+    try {
+      const muted = webRTCService.toggleMute();
+      setIsMuted(muted);
+    } catch (error) {
+      console.error('Error toggling mute:', error);
+    }
   };
 
-  const toggleVideo = () => {
-    setIsVideoOn(!isVideoOn);
-    // In a real app, this would turn camera on/off
+  const toggleVideo = async () => {
+    try {
+      const videoOff = webRTCService.toggleVideo();
+      setIsVideoOn(!videoOff);
+    } catch (error) {
+      console.error('Error toggling video:', error);
+    }
   };
 
-  const switchCamera = () => {
-    setIsFrontCamera(!isFrontCamera);
-    // In a real app, this would switch between front and rear camera
+  const switchCamera = async () => {
+    try {
+      await webRTCService.switchCamera();
+      setIsFrontCamera(!isFrontCamera);
+    } catch (error) {
+      console.error('Error switching camera:', error);
+    }
   };
 
   const handleChat = () => {
@@ -131,6 +244,70 @@ const VideoCallScreen = ({ navigation, route }) => {
         return COLORS.SUCCESS;
     }
   };
+
+  if (!isWebRTCAvailable) {
+    return (
+      <SafeAreaView style={styles.endedContainer}>
+        <View style={styles.endedContent}>
+          <Ionicons name="videocam-off" size={64} color={COLORS.WARNING} />
+          <Text style={styles.endedTitle}>Video Call Not Available</Text>
+          <Text style={styles.endedSubtitle}>
+            Video calling requires a development build
+          </Text>
+          <Text style={styles.endedMessage}>
+            To use video calling features:{'\n\n'}
+            1. Create a development build:{'\n'}
+            {'   '}npx expo run:ios{'\n'}
+            {'   '}or{'\n'}
+            {'   '}npx expo run:android{'\n\n'}
+            2. Install the build on your device
+          </Text>
+          <TouchableOpacity
+            style={styles.backButton}
+            onPress={() => navigation.goBack()}
+          >
+            <Text style={styles.backButtonText}>Go Back</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (callState === 'failed') {
+    return (
+      <SafeAreaView style={styles.endedContainer}>
+        <View style={styles.endedContent}>
+          <Ionicons name="warning" size={64} color={COLORS.ERROR} />
+          <Text style={styles.endedTitle}>Call Failed</Text>
+          <Text style={styles.endedSubtitle}>
+            {error || 'Unable to connect to the call'}
+          </Text>
+          {!isWebRTCAvailable && (
+            <Text style={styles.endedMessage}>
+              Video calling requires a development build. Please run:
+              {'\n\n'}npx expo run:ios{'\n'}or{'\n'}npx expo run:android
+            </Text>
+          )}
+          <TouchableOpacity
+            style={styles.retryButton}
+            onPress={() => {
+              setCallState('initializing');
+              setError(null);
+              initializeCall();
+            }}
+          >
+            <Text style={styles.retryButtonText}>Try Again</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.backButton}
+            onPress={() => navigation.goBack()}
+          >
+            <Text style={styles.backButtonText}>Go Back</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   if (callState === 'ended') {
     return (
@@ -183,14 +360,17 @@ const VideoCallScreen = ({ navigation, route }) => {
 
       {/* Video Area */}
       <View style={styles.videoContainer}>
-        {callState === 'connecting' ? (
+        {(callState === 'initializing' || callState === 'calling' || callState === 'connecting') ? (
           <View style={styles.connectingContainer}>
             <View style={styles.participantAvatar}>
               <Text style={styles.avatarText}>
                 {(patientName || doctorName || 'P').charAt(0)}
               </Text>
             </View>
-            <Text style={styles.connectingText}>Connecting...</Text>
+            <Text style={styles.connectingText}>
+              {callState === 'initializing' ? 'Initializing...' :
+               callState === 'calling' ? 'Calling...' : 'Connecting...'}
+            </Text>
             <View style={styles.loadingDots}>
               <View style={[styles.dot, styles.dot1]} />
               <View style={[styles.dot, styles.dot2]} />
@@ -199,32 +379,43 @@ const VideoCallScreen = ({ navigation, route }) => {
           </View>
         ) : (
           <>
-            {/* Main Video Feed */}
+            {/* Main Video Feed (Remote Stream) */}
             <View style={styles.mainVideo}>
-              {isVideoOn ? (
+              {remoteStream && isVideoOn ? (
+                <RTCView
+                  style={styles.remoteVideo}
+                  streamURL={remoteStream.toURL()}
+                  objectFit="cover"
+                />
+              ) : (
                 <View style={styles.videoPlaceholder}>
                   <Ionicons name="person" size={80} color={COLORS.GRAY_MEDIUM} />
                   <Text style={styles.videoPlaceholderText}>
                     {patientName || doctorName || 'Participant'}
                   </Text>
-                </View>
-              ) : (
-                <View style={styles.videoOff}>
-                  <Ionicons name="videocam-off" size={40} color={COLORS.WHITE} />
-                  <Text style={styles.videoOffText}>Camera is off</Text>
+                  {!isVideoOn && (
+                    <Text style={styles.videoOffText}>Camera is off</Text>
+                  )}
                 </View>
               )}
             </View>
 
             {/* Self Video (Picture-in-Picture) */}
             <View style={styles.selfVideo}>
-              {isVideoOn ? (
-                <View style={styles.selfVideoPlaceholder}>
-                  <Text style={styles.selfVideoText}>You</Text>
-                </View>
+              {localStream && isVideoOn ? (
+                <RTCView
+                  style={styles.localVideo}
+                  streamURL={localStream.toURL()}
+                  objectFit="cover"
+                  mirror={isFrontCamera}
+                />
               ) : (
-                <View style={styles.selfVideoOff}>
-                  <Ionicons name="videocam-off" size={20} color={COLORS.WHITE} />
+                <View style={styles.selfVideoPlaceholder}>
+                  {isVideoOn ? (
+                    <Text style={styles.selfVideoText}>You</Text>
+                  ) : (
+                    <Ionicons name="videocam-off" size={20} color={COLORS.WHITE} />
+                  )}
                 </View>
               )}
             </View>
@@ -454,6 +645,38 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: COLORS.GRAY_DARK,
+  },
+  remoteVideo: {
+    width: '100%',
+    height: '100%',
+  },
+  localVideo: {
+    width: '100%',
+    height: '100%',
+  },
+  retryButton: {
+    backgroundColor: COLORS.PRIMARY,
+    paddingHorizontal: SPACING.LG,
+    paddingVertical: SPACING.MD,
+    borderRadius: BORDER_RADIUS.MD,
+    marginTop: SPACING.LG,
+  },
+  retryButtonText: {
+    color: COLORS.WHITE,
+    fontSize: FONT_SIZES.MD,
+    fontWeight: 'bold',
+  },
+  backButton: {
+    backgroundColor: COLORS.GRAY_MEDIUM,
+    paddingHorizontal: SPACING.LG,
+    paddingVertical: SPACING.MD,
+    borderRadius: BORDER_RADIUS.MD,
+    marginTop: SPACING.MD,
+  },
+  backButtonText: {
+    color: COLORS.WHITE,
+    fontSize: FONT_SIZES.MD,
+    fontWeight: 'bold',
   },
   controlPanel: {
     paddingHorizontal: SPACING.MD,

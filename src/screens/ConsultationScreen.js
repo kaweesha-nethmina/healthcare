@@ -5,7 +5,8 @@ import {
   StyleSheet,
   SafeAreaView,
   ScrollView,
-  TouchableOpacity
+  TouchableOpacity,
+  Alert
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
@@ -133,7 +134,33 @@ const ConsultationScreen = ({ navigation }) => {
       subtitle: 'Real-time video appointments',
       icon: 'videocam',
       color: COLORS.SECONDARY,
-      onPress: () => navigation.navigate('VideoCall'),
+      onPress: () => {
+        // Check if there's an active video appointment
+        const activeVideoAppointment = getUpcomingAppointments().find(
+          app => app.type === 'video' && app.status === CONSULTATION_STATUS.ONGOING
+        );
+        
+        if (activeVideoAppointment) {
+          navigation.navigate('VideoCall', {
+            consultationId: activeVideoAppointment.id,
+            appointmentId: activeVideoAppointment.id,
+            doctorId: activeVideoAppointment.doctorId,
+            doctorName: activeVideoAppointment.doctorName,
+            patientId: activeVideoAppointment.patientId,
+            patientName: activeVideoAppointment.patientName,
+            isInitiator: false
+          });
+        } else {
+          Alert.alert(
+            'No Active Video Consultation',
+            'You don\'t have any active video consultations. Please book an appointment first.',
+            [
+              { text: 'OK' },
+              { text: 'Book Appointment', onPress: () => navigation.navigate('DoctorList') }
+            ]
+          );
+        }
+      },
       show: isPatient
     }
   ];
@@ -195,8 +222,12 @@ const ConsultationScreen = ({ navigation }) => {
               if (appointment.type === 'video') {
                 navigation.navigate('VideoCall', {
                   consultationId: appointment.id,
+                  appointmentId: appointment.id,
                   doctorId: appointment.doctorId,
-                  doctorName: appointment.doctorName
+                  doctorName: appointment.doctorName,
+                  patientId: appointment.patientId,
+                  patientName: appointment.patientName,
+                  isInitiator: false // Patient joins the call initiated by doctor
                 });
               } else if (appointment.type === 'chat') {
                 navigation.navigate('Chat', {
